@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.pdb
+*.egg-info/
+*.eggs/
+*.log
+
+# Virtual Environment
+.env
+.venv/
+venv/
+ENV/
+env/
+*.env
+
+# IDEs and editors
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# WebApp specific
+app/web_app/static/build/
+app/web_app/static/node_modules/
+node_modules/
+dist/
+build/
+
+# Test cache
+.cache/
+.tox/
+pytest_cache/
+
+# Uvicorn/FastAPI temporary files
+instance/
+*.db
+
+# Docker
+*.dockerfile
+docker-compose.override.yml
+
+# Coverage reports
+htmlcov/
+.coverage
+coverage.xml
+
+# Mypy, Pylint
+.mypy_cache/
+pylint-report.txt
+
+# Other
+*.sqlite3
+*.pid
+*.pem
