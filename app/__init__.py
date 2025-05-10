@@ -1,5 +1,5 @@
-"""
-Инициализации основных компонентов (бота, диспетчера).
-Загрузки конфигурации (config).
-Подключения middlewares, routers и других частей системы.
-"""
+from .web_app.bot_app import BotApplication
+from .handlers.user import UserHandler
+from .handlers.admin import AdminHandler
+
+__all__ = ["BotApplication", "UserHandler", "AdminHandler"]
