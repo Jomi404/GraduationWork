@@ -1,13 +1,28 @@
-from sqlalchemy import create_engine, Column, Integer, String, JSON, Boolean, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, JSON, Boolean, DateTime, BigInteger
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql import func
 from environs import Env
-
 
 env = Env()
 env.read_env()
 
 Base = declarative_base()
+
+
+class Admin(Base):
+    """A model for storing admin information.
+    Fields:
+        id: int - The unique identifier of the record.
+        tg_id: bigint - Telegram user ID associated with the admin.
+        name: str - The name of the admin.
+        created_at: datetime - Time when the admin record was created.
+    """
+    __tablename__ = 'admin'
+
+    id = Column(Integer, primary_key=True)
+    tg_id = Column(BigInteger, nullable=False, unique=True)
+    name = Column(String(255), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class PrivacyPolicy(Base):
