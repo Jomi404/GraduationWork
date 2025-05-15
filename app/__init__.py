@@ -1,4 +1,4 @@
-from .web_app.bot_app import BotApplication
+from app.bot_app import BotApplication
 from .handlers.user import UserHandler
 from .handlers.admin import AdminHandler
 

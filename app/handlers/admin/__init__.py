@@ -1,3 +1,4 @@
-from .admin import AdminHandler
+from .router_admin import AdminHandler
+from .models import Admin
 
-__all__ = ["AdminHandler"]
+__all__ = ["AdminHandler", "Admin"]

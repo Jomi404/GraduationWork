@@ -1,4 +1,4 @@
-from .base import BaseHandler
+from .base_handler import BaseHandler
 from .user import UserHandler
 from .admin import AdminHandler
 

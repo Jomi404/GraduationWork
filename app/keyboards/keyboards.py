@@ -1,10 +1,9 @@
-from aiogram.utils.keyboard import ReplyKeyboardBuilder, ReplyKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup
+from aiogram.utils.keyboard import ReplyKeyboardBuilder, ReplyKeyboardMarkup, InlineKeyboardBuilder
 from aiogram import types
 
 
-def get_main_keyboard() -> ReplyKeyboardMarkup:
-    """Создает основную клавиатуру для пользователей."""
-    keyboard_builder = ReplyKeyboardBuilder()
-    keyboard_builder.add(types.KeyboardButton(text='Помощь'))
-    markup = keyboard_builder.as_markup()
-    return markup
+def get_main_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Открыть веб-приложение", url="http://admin-panel-78o9.onrender.com")
+    return builder.as_markup()
