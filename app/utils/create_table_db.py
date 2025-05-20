@@ -2,7 +2,7 @@ from app.core.database import engine, Base
 
 from app.handlers.admin.models import Admin
 from app.handlers.user.models import Agree_Policy
-from app.handlers.models import Privacy_Policy
+from app.handlers.models import Privacy_Policy, Special_Equipment_Category, Special_Equipment, Equipment_Rental_History
 from app.utils import get_logger
 
 logger = get_logger(__name__)

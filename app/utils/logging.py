@@ -15,7 +15,7 @@ def setup_logging():
             log_colors={
                 'DEBUG': 'cyan',
                 'INFO': 'green',
-                'WARNING': 'orange',
+                'WARNING': 'yellow',
                 'ERROR': 'red',
                 'CRITICAL': 'red,bold',
             }
@@ -37,7 +37,7 @@ def setup_logging():
         # Добавление обработчиков к логгеру
         logger.addHandler(console_handler)
         logger.addHandler(file_handler)
-        logger.setLevel(logging.INFO)
+        logger.setLevel(logging.DEBUG)
 
 
 def get_logger(name: str) -> logging.Logger:

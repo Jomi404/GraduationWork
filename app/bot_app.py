@@ -1,9 +1,12 @@
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, Router
+from aiogram_dialog import setup_dialogs
 from app.config import settings
-from app.utils import setup_logging, get_logger
+from app.utils import setup_logging, get_logger, generate_default_equipment
 from app.middlewares import LoggingMiddleware
 from app.utils import init_db
-from aiogram_dialog import setup_dialogs
+from app.handlers.user.router_user import UserHandler
+from app.handlers.admin.router_admin import AdminHandler
+from app.core.database import get_session
 
 
 class BotApplication:
@@ -20,12 +23,34 @@ class BotApplication:
 
         # Регистрация middleware
         self.dp.message.middleware(LoggingMiddleware())
-        # настройка промежуточных программ и основных обработчиков aiogram-dialogs
+
+        # Создание отдельных роутеров для обработчиков
+        user_router = Router()
+        admin_router = Router()
+
+        # Инициализация обработчиков
+        self.user_handler = UserHandler(user_router)
+        self.admin_handler = AdminHandler(admin_router)
+
+        # Регистрация middleware для логгеров
+        self.dp.update.middleware(self.user_handler.set_logger_middleware)
+        self.dp.update.middleware(self.admin_handler.set_logger_middleware)
+
+        # Регистрация обработчиков
+        self.user_handler.register_handlers()
+        self.admin_handler.register_handlers()
+
+        # Включение роутеров в Dispatcher
+        self.dp.include_router(user_router)
+        self.dp.include_router(admin_router)
         setup_dialogs(self.dp)
         self.logger.info("Бот инициализирован")
 
     async def start(self):
         await init_db()
+        # Генерация дефолтных записей техники
+        async with get_session() as session:  # Используем get_session вместо connection
+            await generate_default_equipment(session)
         # Очистка накопившихся обновлений
         self.logger.info("Очистка накопившихся обновлений...")
         await self.bot.delete_webhook(drop_pending_updates=True)

@@ -6,42 +6,65 @@ from decimal import Decimal
 from sqlalchemy import func, TIMESTAMP, Integer, inspect, text
 from sqlalchemy.orm import Mapped, mapped_column, DeclarativeBase, declared_attr
 from sqlalchemy.ext.asyncio import AsyncAttrs, async_sessionmaker, create_async_engine, AsyncSession
-
+from contextlib import asynccontextmanager
 
 from app.config import database_url
+from app.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 engine = create_async_engine(url=database_url)
 async_session_maker = async_sessionmaker(engine, class_=AsyncSession)
 str_uniq = Annotated[str, mapped_column(unique=True, nullable=False)]
 
-"""
-Декоратор connection из database.py не обязателен для init_db(), так как создание таблиц — это одноразовая операция, 
-выполняемая через Base.metadata.create_all. Декоратор полезен для операций, требующих управления транзакциями 
-(например, вставка, обновление, запросы). Если вы хотите использовать его в других частях приложения 
-(например, в UserHandler или AdminHandler), применяйте его к методам, работающим с сессией:
-@connection()
-async def get_admin(tg_id: int, session: AsyncSession):
-    result = await session.execute(select(Admin).filter_by(tg_id=tg_id))
-    return result.scalars().first()
-"""
+
+@asynccontextmanager
+async def get_session():
+    """Асинхронный контекстный менеджер для управления сессиями базы данных."""
+    logger.debug("Создание новой сессии базы данных")
+    session = async_session_maker()
+    try:
+        yield session
+    except Exception as e:
+        logger.error(f"Ошибка в сессии базы данных: {str(e)}", exc_info=True)
+        await session.rollback()
+        raise
+    finally:
+        await session.close()
+        logger.debug("Сессия базы данных закрыта")
 
 
 def connection(isolation_level=None):
     def decorator(method):
         @wraps(method)
         async def wrapper(*args, **kwargs):
+            # Извлекаем manager из kwargs, если он есть
+            manager = kwargs.get("manager")
+
             async with async_session_maker() as session:
                 try:
                     # Устанавливаем уровень изоляции, если передан
                     if isolation_level:
                         await session.execute(text(f"SET TRANSACTION ISOLATION LEVEL {isolation_level}"))
 
+                    # Если есть manager, добавляем сессию в middleware_data
+                    if manager and hasattr(manager, "middleware_data"):
+                        manager.middleware_data["session"] = session
+
+                    # Добавляем сессию в kwargs, если её там нет
+                    if "session" not in kwargs:
+                        kwargs["session"] = session
+
                     # Выполняем декорированный метод
-                    return await method(*args, session=session, **kwargs)
+                    result = await method(*args, **kwargs)
+                    await session.commit()
+                    return result
                 except Exception as e:
                     await session.rollback()  # Откатываем сессию при ошибке
                     raise e  # Поднимаем исключение дальше
                 finally:
+                    if manager and hasattr(manager, "middleware_data") and "session" in manager.middleware_data:
+                        del manager.middleware_data["session"]
                     await session.close()  # Закрываем сессию
 
         return wrapper

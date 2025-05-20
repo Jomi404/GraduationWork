@@ -1,7 +1,6 @@
 import asyncio
-from app import BotApplication, UserHandler, AdminHandler
+from app import BotApplication
 from app.utils import setup_logging, get_logger
-
 
 async def main():
     # Настройка логирования
@@ -13,12 +12,6 @@ async def main():
         # Создание и настройка приложения
         logger.debug("Создание экземпляра BotApplication")
         app_main = BotApplication()
-
-        # Регистрация хендлеров
-        logger.debug("Регистрация UserHandler")
-        UserHandler(app_main.dp)
-        logger.debug("Регистрация AdminHandler")
-        AdminHandler(app_main.dp)
 
         # Регистрация startup-обработчика
         logger.debug("Регистрация startup-обработчика")
@@ -38,9 +31,8 @@ async def main():
             await app_main.bot.session.close()
             logger.debug("Сессия бота закрыта")
 
-
 if __name__ == "__main__":
-    my_logger = get_logger(__name__)  # Создаем логгер один раз
+    my_logger = get_logger(__name__)
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

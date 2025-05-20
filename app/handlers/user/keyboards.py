@@ -1,0 +1,91 @@
+from aiogram_dialog.widgets.common import ManagedScroll
+from aiogram_dialog.widgets.kbd import ScrollingGroup, Select
+from aiogram_dialog.widgets.text import Format
+from operator import itemgetter
+from app.utils.logging import get_logger
+from aiogram.types import CallbackQuery
+from aiogram_dialog import DialogManager
+
+logger = get_logger(__name__)
+
+SCROLLING_HEIGHT = 5
+
+
+def paginated_categories(on_click):
+    async def update_category_page(event: CallbackQuery, scroll: "ManagedScroll", manager: DialogManager) -> None:
+        try:
+            callback_data = event.data
+            if "category_ids:" in callback_data:
+                page_str = callback_data.split("category_ids:")[1]
+                page = int(page_str)
+                total_pages = manager.dialog_data.get("total_category_pages", 1)
+                logger.debug(f"Получено total_pages из dialog_data: {total_pages}")
+                if 0 <= page < total_pages:
+                    manager.dialog_data["category_page"] = page
+                    logger.debug(f"Обновлена страница категорий: {page}")
+                else:
+                    logger.warning(f"Попытка установить недопустимую страницу: {page}, всего страниц: {total_pages}")
+            else:
+                logger.error(f"Неверный формат callback_data: {callback_data}")
+        except (ValueError, TypeError, IndexError) as e:
+            logger.error(f"Ошибка при обновлении страницы категорий: {str(e)}")
+
+    return ScrollingGroup(
+        Select(
+            Format("{item[0]}"),
+            id="s_scroll_categories",
+            item_id_getter=itemgetter(1),
+            items="categories",
+            on_click=on_click,
+        ),
+        id="category_ids",
+        width=1,
+        height=SCROLLING_HEIGHT,
+        hide_on_single_page=True,
+        hide_pager=False,
+        on_page_changed=update_category_page,
+    )
+
+
+def paginated_equipment(on_click):
+    logger.debug("Создание paginated_equipment")
+
+    async def update_equipment_page(event: CallbackQuery, scroll: "ManagedScroll", manager: DialogManager) -> None:
+        try:
+            callback_data = event.data
+            if "equipment_ids:" in callback_data:
+                page_str = callback_data.split("equipment_ids:")[1]
+                page = int(page_str)
+                category_id = manager.start_data.get("category_id")
+                if not category_id:
+                    logger.error("category_id отсутствует в start_data")
+                    return
+                total_pages = manager.dialog_data.get(f"total_equipment_pages_{category_id}", 1)
+                if 0 <= page < total_pages:
+                    manager.dialog_data[f"equipment_page_{category_id}"] = page
+                    logger.debug(f"Обновлена страница оборудования для category_id={category_id}: {page}")
+                else:
+                    logger.warning(f"Попытка установить недопустимую страницу: {page}, всего страниц: {total_pages}")
+            else:
+                logger.error(f"Неверный формат callback_data: {callback_data}")
+        except (ValueError, TypeError, IndexError) as e:
+            logger.error(f"Ошибка при обновлении страницы оборудования: {str(e)}")
+
+    select_widget = Select(
+        Format("{item[0]}"),
+        id="s_scroll_equipment",
+        item_id_getter=itemgetter(1),
+        items="equipment",
+        on_click=on_click,
+    )
+    scrolling_group = ScrollingGroup(
+        select_widget,
+        id="equipment_ids",
+        width=1,
+        height=SCROLLING_HEIGHT,
+        hide_on_single_page=True,
+        hide_pager=False,
+        on_page_changed=update_equipment_page,
+    )
+    logger.debug(f"Создана клавиатура с id=equipment_ids, содержит Select")
+    return scrolling_group
