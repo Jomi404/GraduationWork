@@ -65,6 +65,10 @@ class SpecialEquipmentIdFilter(BaseModel):
     id: int
 
 
+class SpecialEquipmentIdFilterName(BaseModel):
+    name: str
+
+
 class SpecialEquipmentBase(SpecialEquipmentCategoryId):
     # Базовая схема для общих полей спецтехники.
     # Содержит поля, общие для создания, обновления и чтения.
@@ -135,4 +139,71 @@ class EquipmentRentalHistoryRead(EquipmentRentalHistoryBase):
     # "2025-05-19T08:00:00", "end_date": null, "rental_price_at_time": 500.00, ...}
     id: int
     created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RequestStatusBase(BaseModel):
+    """Базовая схема для общих полей статуса заявки."""
+    name: str
+
+
+class RequestStatusCreate(RequestStatusBase):
+    """Схема для создания нового статуса заявки."""
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RequestStatusUpdate(BaseModel):
+    """Схема для обновления статуса заявки."""
+    name: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RequestStatusRead(RequestStatusBase):
+    """Схема для чтения статуса заявки."""
+    id: int
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RequestBase(BaseModel):
+    """Базовая схема для общих полей заявки."""
+    tg_id: int
+    equipment_name: str
+    selected_date: datetime
+    phone_number: str
+    address: str
+    first_name: str
+    username: str
+    status_id: int
+
+
+class RequestCreate(BaseModel):
+    """Схема для создания новой заявки."""
+    tg_id: int
+    equipment_name: str
+    selected_date: datetime
+    phone_number: str
+    address: str
+    first_name: Optional[str] = None
+    username: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RequestUpdate(BaseModel):
+    """Схема для обновления заявки."""
+    tg_id: Optional[int] = None
+    equipment_name: Optional[str] = None
+    selected_date: Optional[datetime] = None
+    phone_number: Optional[str] = None
+    address: Optional[str] = None
+    first_name: Optional[str] = None
+    username: Optional[str] = None
+    status_id: Optional[int] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RequestRead(RequestBase):
+    """Схема для чтения заявки."""
+    id: int
+    created_at: datetime
+    updated_at: datetime
     model_config = ConfigDict(from_attributes=True)

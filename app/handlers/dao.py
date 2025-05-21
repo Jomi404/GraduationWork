@@ -1,5 +1,10 @@
 from app.core.base_dao import BaseDAO
-from app.handlers.models import Privacy_Policy, Special_Equipment_Category, Special_Equipment, Equipment_Rental_History
+from app.handlers.models import Privacy_Policy, Special_Equipment_Category, Special_Equipment, \
+    Equipment_Rental_History, Request_Status, Request
+from app.handlers.schemas import RequestStatusBase, RequestCreate, SpecialEquipmentIdFilterName
+from app.utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class PrivacyPolicyDAO(BaseDAO[Privacy_Policy]):
@@ -39,6 +44,11 @@ class SpecialEquipmentDAO(BaseDAO[Special_Equipment]):
     """
     model = Special_Equipment
 
+    async def find_by_name(self, name: str) -> Special_Equipment | None:
+        """Найти оборудование по имени."""
+        filters = SpecialEquipmentIdFilterName(name=name)
+        return await self.find_one_or_none(filters)
+
 
 class EquipmentRentalHistoryDAO(BaseDAO[Equipment_Rental_History]):
     """Объект доступа к данным (DAO) для управления записями EquipmentRentalHistory.
@@ -57,3 +67,30 @@ class EquipmentRentalHistoryDAO(BaseDAO[Equipment_Rental_History]):
             }, session=session)
     """
     model = Equipment_Rental_History
+
+
+class RequestStatusDAO(BaseDAO[Request_Status]):
+    """Объект доступа к данным (DAO) для управления записями Request_Status."""
+    model = Request_Status
+
+
+class RequestDAO(BaseDAO[Request]):
+    """Объект доступа к данным (DAO) для управления записями Requests."""
+    model = Request
+
+    async def add(self, values: 'RequestCreate'):
+        values_dict = values.model_dump(exclude_unset=True)
+        status_dao = RequestStatusDAO(self._session)
+        status = await status_dao.find_one_or_none(filters=RequestStatusBase(name="В работе"))
+        if not status:
+            raise ValueError("Статус 'В работе' не найден в базе данных")
+        values_dict["status_id"] = status.id
+        new_instance = self.model(**values_dict)
+        self._session.add(new_instance)
+        try:
+            re = await self._session.flush()
+            logger.info(f're {re}')
+        except Exception as e:
+            logger.error(f"Ошибка при flush: {e}")
+            raise
+        return new_instance

@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String, Text, Integer, ForeignKey, Numeric, Index, TIMESTAMP, DECIMAL, Boolean
+from sqlalchemy import String, Text, Integer, ForeignKey, Numeric, Index, TIMESTAMP, DECIMAL, Boolean, BigInteger
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -96,7 +96,6 @@ class Special_Equipment(Base):
         return f"<{self.__class__.__name__}(id={self.id}, name={self.name})>"
 
 
-
 class Equipment_Rental_History(Base):
     """Модель для хранения истории аренды спецтехники.
     Поля:
@@ -129,3 +128,40 @@ class Equipment_Rental_History(Base):
 Index("idx_equipment_category_id", Special_Equipment.category_id)
 Index("idx_rental_history_equipment_id", Equipment_Rental_History.equipment_id)
 Index("idx_rental_history_dates", Equipment_Rental_History.start_date, Equipment_Rental_History.end_date)
+
+
+class Request_Status(Base):
+    """Модель для хранения статусов заявок."""
+    __tablename__ = "request_statuses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
+
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__}(id={self.id}, name={self.name})>"
+
+
+class Request(Base):
+    """Модель для хранения заявок."""
+    __tablename__ = "requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tg_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    equipment_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    selected_date: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False)
+    phone_number: Mapped[str] = mapped_column(String(20), nullable=False)
+    address: Mapped[str] = mapped_column(String(255), nullable=False)
+    first_name: Mapped[str] = mapped_column(String(50), nullable=False)
+    username: Mapped[str] = mapped_column(String(50), nullable=True)
+    status_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("request_statuses.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP, server_default=func.now(), onupdate=func.now()
+    )
+
+    status: Mapped["Request_Status"] = relationship("Request_Status")
+
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__}(id={self.id}, tg_id={self.tg_id}, status_id={self.status_id})>"

@@ -2,23 +2,29 @@ from aiogram import Router
 from aiogram.enums import ContentType
 from aiogram.filters import Command
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, Update
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, Update, \
+    KeyboardButton, ReplyKeyboardMarkup
 from aiogram_dialog import Dialog, DialogManager, Window, StartMode
+from aiogram_dialog.widgets.input import MessageInput
 from aiogram_dialog.widgets.kbd import Button, SwitchTo, Cancel, Back
 from aiogram_dialog.widgets.media import StaticMedia
 from aiogram_dialog.widgets.text import Const, Format
 from aiogram_dialog.api.exceptions import NoContextError, UnknownIntent
 from pydantic import ValidationError
+
+from app.handlers.user.window import create_confirmation_window, create_rental_calendar_window, enter_phone_getter, \
+    create_request_getter, enter_address_getter
 from app.utils.logging import get_logger
 
-from app.core.database import connection
+from app.core.database import connection, async_session_maker
 from app.handlers import BaseHandler
-from app.handlers.schemas import TelegramIDModel, SpecialEquipmentCategoryBase, SpecialEquipmentIdFilter
+from app.handlers.schemas import TelegramIDModel, SpecialEquipmentCategoryBase, SpecialEquipmentIdFilter,  \
+    RequestCreate, EquipmentRentalHistoryCreate
 from app.handlers.user.dao import AgreePolicyDAO
-from app.handlers.dao import SpecialEquipmentCategoryDAO, SpecialEquipmentDAO
+from app.handlers.dao import SpecialEquipmentCategoryDAO, SpecialEquipmentDAO, RequestDAO, EquipmentRentalHistoryDAO
 from app.handlers.user.schemas import AgreePolicyModel
 from app.handlers.user.utils import AgreePolicyFilter, get_active_policy_url, async_get_category_buttons, \
-    async_get_equipment_buttons, async_get_equipment_details
+    async_get_equipment_buttons, async_get_equipment_details, validate_phone_number, no_err_filter
 from app.handlers.user.keyboards import paginated_categories, paginated_equipment
 
 logger = get_logger(__name__)
@@ -29,7 +35,15 @@ class MainDialogStates(StatesGroup):
     select_category = State()
     select_equipment = State()
     view_equipment_details = State()
-    rent_equipment = State()
+    confirm_select_equipment = State()
+    select_date = State()
+    confirm_date = State()
+    enter_phone = State()
+    confirm_phone = State()
+    enter_address = State()
+    confirm_address = State()
+    create_request = State()
+    request_sent = State()
 
 
 # Функция для извлечения пользователя из объекта Update
@@ -161,7 +175,228 @@ async def go_menu(callback: CallbackQuery, button: Button, manager: DialogManage
     await manager.switch_to(MainDialogStates.action_menu)
 
 
+async def on_share_contact_click(callback, button, manager: DialogManager):
+    # Создаём клавиатуру с кнопкой для запроса контакта
+    contact_button = KeyboardButton(text="Отправить номер", request_contact=True)
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[[contact_button]],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    # Отправляем сообщение с клавиатурой
+    await callback.message.answer(
+        "Нажмите кнопку ниже, чтобы отправить ваш номер телефона.",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+async def on_phone_number_input(message: Message, widget: MessageInput, dialog_manager: DialogManager):
+    if message.contact:
+        phone_number = message.contact.phone_number
+        formatted_phone = validate_phone_number(phone_number)
+        if formatted_phone:
+            dialog_manager.dialog_data["phone_number"] = formatted_phone
+            await dialog_manager.switch_to(MainDialogStates.confirm_phone)
+        else:
+            dialog_manager.dialog_data["error_message"] = "Неверный формат номера телефона."
+    else:
+        phone = message.text
+        formatted_phone = validate_phone_number(phone)
+        if formatted_phone:
+            dialog_manager.dialog_data["phone_number"] = formatted_phone
+            await dialog_manager.switch_to(MainDialogStates.confirm_phone)
+        else:
+            dialog_manager.dialog_data["error_message"] = (
+                "Неверный формат номера ❌\n"
+                "Пожалуйста, введите номер в формате 89930057019 ✅\n"
+                "Или нажмите Отправить номер"
+            )
+
+
+async def on_address_input(message: Message, widget: MessageInput, dialog_manager: DialogManager):
+    if message.text:
+        dialog_manager.dialog_data["address"] = message.text
+        await dialog_manager.switch_to(MainDialogStates.confirm_address)
+    else:
+        dialog_manager.dialog_data["error_message"] = "Отправьте адрес текстом."
+
+
+async def on_send_request_click(callback: CallbackQuery, button: Button, dialog_manager: DialogManager) -> None:
+    logger_my = dialog_manager.middleware_data.get("logger") or logger
+    user = callback.from_user
+    data = dialog_manager.dialog_data
+
+    # Извлекаем данные из диалога
+    equipment_name = data.get("equipment_name")
+    selected_date = data.get("selected_date")
+    phone_number = data.get("phone_number")
+    address = data.get("address")
+    first_name = user.first_name
+    username = user.username
+
+    if not username:
+        username = None
+
+    async with async_session_maker() as session:
+        try:
+            equipment_dao = SpecialEquipmentDAO(session)
+            equipment = await equipment_dao.find_by_name(equipment_name)
+            if not equipment:
+                raise ValueError(f"Оборудование с именем '{equipment_name}' не найдено")
+
+            request_dao = RequestDAO(session)
+            new_request = RequestCreate(
+                tg_id=user.id,
+                equipment_name=equipment_name,
+                selected_date=selected_date,
+                phone_number=phone_number,
+                address=address,
+                first_name=first_name,
+                username=username
+            )
+            temp = await request_dao.add(new_request)
+
+            rental_history_dao = EquipmentRentalHistoryDAO(session)
+            rental_history = EquipmentRentalHistoryCreate(
+                equipment_id=equipment.id,
+                start_date=selected_date,
+                rental_price_at_time=equipment.rental_price_per_day
+            )
+            await rental_history_dao.add(rental_history)
+
+            await session.commit()
+
+            await callback.message.answer("Заявка успешно отправлена!")
+        except Exception as e:
+            await session.rollback()
+            return
+
+    await dialog_manager.switch_to(MainDialogStates.request_sent)
+    await callback.answer()
+
+
 def main_dialog() -> Dialog:
+    confirm_select_equipment_window = create_confirmation_window(
+        text="Вы уверены, что хотите арендовать эту технику?",
+        intermediate_state=MainDialogStates.confirm_select_equipment,
+        next_state=MainDialogStates.select_date,
+        fields=["equipment_name", "rental_price"],
+        formats=[
+            "Техника: {equipment_name}",
+            "Цена аренды: {rental_price} руб/час",
+        ]
+    )
+
+    confirm_date_window = create_confirmation_window(
+        text="Подтвердите Дату аренды:",
+        intermediate_state=MainDialogStates.confirm_date,
+        next_state=MainDialogStates.enter_phone,
+        fields=["equipment_name", "selected_date"],
+        formats=["Техника: {equipment_name}", "Вы выбрали дату: {selected_date}"]
+    )
+
+    confirm_phone_window = create_confirmation_window(
+        text="Подтвердите ваш номер телефона:",
+        intermediate_state=MainDialogStates.confirm_phone,
+        next_state=MainDialogStates.enter_address,
+        fields=["phone_number"],
+        formats=["Ваш номер телефона: {phone_number}"]
+    )
+
+    confirm_address_window = create_confirmation_window(
+        text="Подтвердите адрес доставки:",
+        intermediate_state=MainDialogStates.confirm_address,
+        next_state=MainDialogStates.create_request,
+        fields=["address"],
+        formats=["Ваш адрес доставки: {address}"]
+    )
+
+    view_equipment_details_window = Window(
+        StaticMedia(
+            url="https://iimg.su/i/7vTQV5",
+            type=ContentType.PHOTO
+        ),
+        Format("Техника: {equipment_name}"),
+        Format("Цена аренды: {rental_price} руб/час"),
+        Format("Описание: {description}"),
+        SwitchTo(text=Const(text='Арендовать'), id='rent_equipment', state=MainDialogStates.confirm_select_equipment),
+        Cancel(text=Const(text='Назад'), id='back_1_menu'),
+        Button(text=Const(text='Меню'), id='to_menu', on_click=go_menu),
+        state=MainDialogStates.view_equipment_details,
+        getter=async_get_equipment_details
+    )
+
+    enter_phone_window = Window(
+        StaticMedia(
+            url="https://iimg.su/i/7vTQV5",
+            type=ContentType.PHOTO
+        ),
+        # Отображение ошибки, если она есть
+        Format("{error_message}", when="error_message"),
+        # Отображение техники и даты, если ошибки нет
+        Format("Техника: {equipment_name}", when=no_err_filter),
+        Format("Дата: {selected_date}", when=no_err_filter),
+        # Отображение начального текста, если ошибки нет
+        Format(
+            "Введите номер телефона ниже\nили используйте кнопку 'Отправить номер'.",
+            when=no_err_filter
+        ),
+        MessageInput(on_phone_number_input),
+        Button(Const("Отправить номер"), id="share_contact", on_click=on_share_contact_click),
+        Back(text=Const(text='Назад'), id='back'),
+        state=MainDialogStates.enter_phone,
+        getter=enter_phone_getter
+    )
+
+    enter_address_window = Window(
+        StaticMedia(
+            url="https://iimg.su/i/7vTQV5",
+            type=ContentType.PHOTO
+        ),
+        Format("{error_message}", when="error_message"),
+        Format("Техника: {equipment_name}", when=no_err_filter),
+        Format("Дата: {selected_date}", when=no_err_filter),
+        Format("Номер телефона: {phone_number}", when=no_err_filter),
+        Format(
+            "Введите адрес доставки ниже.",
+            when=no_err_filter
+        ),
+        MessageInput(on_address_input),
+        Back(text=Const(text='Назад'), id='back'),
+        state=MainDialogStates.enter_address,
+        getter=enter_address_getter
+    )
+
+    create_request_window = Window(
+        StaticMedia(
+            url="https://iimg.su/i/7vTQV5",
+            type=ContentType.PHOTO
+        ),
+        Format("Заявка на аренду почти готова..."),
+        Format("✅ Техника: {equipment_name}"),
+        Format("✅ Дата: {selected_date}"),
+        Format("✅ Номер телефона: {phone_number}"),
+        Format("✅ Адрес доставки: {address}"),
+        Format("✅ Имя: {first_name}"),
+        Format("✅ tg: @{username}"),
+        Button(Const('Отправить заявку менеджеру ✅'), id='send_request', on_click=on_send_request_click),
+        Back(text=Const(text='Назад'), id='back'),
+        Button(text=Const(text='Меню'), id='to_menu', on_click=go_menu),
+        state=MainDialogStates.create_request,
+        getter=create_request_getter
+    )
+
+    request_sent_window = Window(
+        StaticMedia(
+            url="https://iimg.su/i/7vTQV5",
+            type=ContentType.PHOTO
+        ),
+        Const("Заявка успешно отправлена менеджеру! ✅"),
+        Button(text=Const(text='Меню'), id='to_menu', on_click=go_menu),
+        state=MainDialogStates.request_sent,
+    )
+
     return Dialog(
         Window(
             Const("Главное меню"),
@@ -202,20 +437,16 @@ def main_dialog() -> Dialog:
             state=MainDialogStates.select_equipment,
             getter=async_get_equipment_buttons
         ),
-        Window(
-            StaticMedia(
-                url="https://iimg.su/i/7vTQV5",
-                type=ContentType.PHOTO
-            ),
-            Format("Техника: {equipment_name}"),
-            Format("Цена аренды: {rental_price} руб/час"),
-            Format("Описание: {description}"),
-            SwitchTo(text=Const(text='Аренда'), id='rent_equipment', state=MainDialogStates.select_equipment),
-            Cancel(text=Const(text='Назад'), id='back_1_menu'),
-            Button(text=Const(text='Меню'), id='to_menu', on_click=go_menu),
-            state=MainDialogStates.view_equipment_details,
-            getter=async_get_equipment_details
-        )
+        view_equipment_details_window,
+        confirm_select_equipment_window,
+        create_rental_calendar_window(MainDialogStates.select_date, MainDialogStates.confirm_date),
+        confirm_date_window,
+        enter_phone_window,
+        confirm_phone_window,
+        enter_address_window,
+        confirm_address_window,
+        create_request_window,
+        request_sent_window,
     )
 
 
@@ -259,8 +490,6 @@ class UserHandler(BaseHandler):
         self.dp.callback_query(lambda c: c.data == "agree_policy")(on_agree_policy_click)
 
     async def set_logger_middleware(self, handler, event, data: dict):
-        # Добавляем маркер, чтобы подтвердить, что используется обновлённая версия кода
-        self.logger.info("Используется обновлённая версия set_logger_middleware v2.2")
         try:
             data["logger"] = self.logger
             return await handler(event, data)

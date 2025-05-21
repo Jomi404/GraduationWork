@@ -1,13 +1,17 @@
+import re
 from aiogram.filters import BaseFilter
 from aiogram.types import Message
 from aiogram_dialog import DialogManager
-from sqlalchemy import select
+from datetime import datetime, timedelta
+from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Optional
 
 from app.core.database import connection, get_session
 from app.handlers.schemas import TelegramIDModel, PrivacyPolicyFilter, SpecialEquipmentCategoryCatId, \
-    SpecialEquipmentIdFilter
+    SpecialEquipmentIdFilter, SpecialEquipmentIdFilterName
 from app.handlers.user.dao import AgreePolicyDAO
-from app.handlers.dao import PrivacyPolicyDAO, SpecialEquipmentCategoryDAO, SpecialEquipmentDAO
+from app.handlers.dao import PrivacyPolicyDAO, SpecialEquipmentCategoryDAO, SpecialEquipmentDAO, \
+    EquipmentRentalHistoryDAO
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -101,36 +105,29 @@ async def async_get_category_buttons(dialog_manager: DialogManager, **kwargs) ->
 
 async def async_get_equipment_buttons(dialog_manager: DialogManager, **kwargs) -> dict:
     logger_my = dialog_manager.middleware_data.get("logger") or logger
-    logger_my.debug("Calling async_get_equipment_buttons")
 
     category_id = dialog_manager.start_data.get("category_id")
-    logger_my.debug(f"start_data: {dialog_manager.start_data}")
     if not category_id:
         logger_my.error("category_id is missing in start_data")
         return {"equipment": [], "total_pages": 1}
 
     items_per_page = 5
-    current_page = dialog_manager.dialog_data.get(f"equipment_page_{category_id}", 0)
     cache_key = f"cached_equipment_{category_id}"
+    pages_key = f"total_equipment_pages_{category_id}"
 
-    if cache_key in dialog_manager.dialog_data:
-        all_equipment = dialog_manager.dialog_data[cache_key]
-        logger_my.debug(
-            f"Используются кэшированные данные оборудования для category_id={category_id}, всего: {len(all_equipment)}")
-    else:
+    if cache_key not in dialog_manager.dialog_data:
         async with get_session() as session:
             equipment_dao = SpecialEquipmentDAO(session)
-            equipment = await equipment_dao.find_all(SpecialEquipmentCategoryCatId(category_id=category_id))
+            equipment = await equipment_dao.find_all(
+                SpecialEquipmentCategoryCatId(category_id=category_id)
+            )
             all_equipment = [(equip.name, str(equip.id)) for equip in equipment]
             dialog_manager.dialog_data[cache_key] = all_equipment
-            logger_my.debug(f"Кэшировано оборудование для category_id={category_id}: {all_equipment}")
-
-    total_equipment = len(all_equipment)
-    total_pages = (total_equipment + items_per_page - 1) // items_per_page
-
-    # Возвращаем полный список оборудования
-    dialog_manager.dialog_data[f"total_equipment_pages_{category_id}"] = total_pages
-    logger_my.debug(f"Подготовлены данные оборудования: {all_equipment}")
+            total_pages = (len(all_equipment) + items_per_page - 1) // items_per_page
+            dialog_manager.dialog_data[pages_key] = total_pages
+    else:
+        all_equipment = dialog_manager.dialog_data[cache_key]
+        total_pages = dialog_manager.dialog_data[pages_key]
 
     return {"equipment": all_equipment, "total_pages": total_pages}
 
@@ -153,8 +150,125 @@ async def async_get_equipment_details(dialog_manager: DialogManager, **kwargs) -
             logger_my.error(f"Техника с id={equipment_id} не найдена")
             return {"equipment_name": "Неизвестно", "rental_price": 0, "description": "Нет данных"}
 
+        dialog_manager.dialog_data.update({"equipment_name": equipment.name,
+                                           "rental_price": float(equipment.rental_price_per_day)})
+
         return {
             "equipment_name": equipment.name,
             "rental_price": float(equipment.rental_price_per_day),
             "description": equipment.description or "Нет описания"
         }
+
+
+async def check_equipment_availability(equipment_name: str, session: AsyncSession) -> dict:
+    """
+    Проверяет доступность техники на текущую неделю, начиная с текущего дня.
+
+    Args:
+        equipment_name (str): Название техники.
+        session (AsyncSession): Сессия базы данных.
+
+    Returns:
+        dict: Словарь с информацией о доступности:
+              - is_available (bool): Доступна ли техника.
+              - available_dates (list): Список доступных дат в формате ISO (только текущие и будущие даты).
+              - message (str): Сообщение о статусе доступности.
+    """
+    logger.debug(f"Проверка доступности техники: {equipment_name}")
+    try:
+        # Получаем ID техники по имени
+        equipment_dao = SpecialEquipmentDAO(session)
+        equipment = await equipment_dao.find_one_or_none(SpecialEquipmentIdFilterName(name=equipment_name))
+
+        if not equipment:
+            logger.error(f"Техника с именем {equipment_name} не найдена")
+            return {
+                "is_available": False,
+                "available_dates": [],
+                "message": f"Техника {equipment_name} не найдена"
+            }
+
+        # Определяем текущую дату и конец текущей недели (воскресенье)
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        days_since_monday = today.weekday()  # 0 для понедельника, 1 для вторника и т.д.
+        monday = today - timedelta(days=days_since_monday)
+        sunday = monday + timedelta(days=6)
+
+        # Получаем записи об аренде для техники
+        rental_dao = EquipmentRentalHistoryDAO(session)
+        rentals = await rental_dao.find_all()
+        rentals = [
+            rental for rental in rentals
+            if rental.equipment_id == equipment.id
+               and rental.start_date <= sunday
+               and (rental.end_date is None or rental.end_date >= monday)
+        ]
+
+        logger.debug(
+            f"Найденные записи об аренде для {equipment_name}: {[(r.start_date, r.end_date) for r in rentals]}")
+
+        # Создаем список дат, начиная с сегодняшнего дня до воскресенья
+        all_dates = [today + timedelta(days=i) for i in range((sunday - today).days + 1)]
+        available_dates = []
+
+        # Проверяем каждую дату на доступность
+        for date in all_dates:
+            is_date_available = True
+            for rental in rentals:
+                rental_start = rental.start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+                rental_end = (rental.end_date or sunday).replace(hour=0, minute=0, second=0, microsecond=0)
+
+                # Проверяем, пересекается ли дата с периодом аренды
+                if rental_start <= date <= rental_end:
+                    is_date_available = False
+                    logger.debug(f"Дата {date} занята: аренда с {rental_start} по {rental_end}")
+                    break
+
+            if is_date_available:
+                available_dates.append(date.isoformat())
+                logger.debug(f"Дата {date} доступна")
+
+        is_available = len(available_dates) > 0
+        message = (
+            f"Техника {equipment_name} доступна для аренды на текущей неделе"
+            if is_available
+            else f"Техника {equipment_name} занята на текущей неделе"
+        )
+
+        logger.info(f"Результат проверки доступности {equipment_name}: {message}")
+        logger.debug(f"Доступные даты: {available_dates}")
+        return {
+            "is_available": is_available,
+            "available_dates": available_dates,
+            "message": message
+        }
+
+    except Exception as e:
+        logger.error(f"Ошибка при проверке доступности техники {equipment_name}: {str(e)}", exc_info=True)
+        return {
+            "is_available": False,
+            "available_dates": [],
+            "message": f"Ошибка при проверке доступности техники: {str(e)}"
+        }
+
+
+def validate_phone_number(phone: str) -> Optional[str]:
+    # Удаляем все нечисловые символы
+    digits = re.sub(r'\D', '', phone)
+    # Проверяем различные варианты ввода
+    if len(digits) == 11 and digits[0] in ['7', '8']:
+        return '+7' + digits[1:]  # Например, 89930057019 -> +79930057019
+    elif len(digits) == 10:
+        return '+7' + digits  # Например, 9930057019 -> +79930057019
+    elif len(digits) == 12 and digits.startswith('7'):
+        return '+' + digits  # Например, +79930057019 -> +79930057019
+    else:
+        return None
+
+
+def no_err_filter(data: dict, widget, manager: DialogManager) -> bool:
+    return not data.get("error_message")
+
+
+def is_not_available_filter(data: dict, widget, manager: DialogManager) -> bool:
+    return not data.get("is_available", False)
