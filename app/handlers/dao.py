@@ -1,7 +1,7 @@
 from app.core.base_dao import BaseDAO
 from app.handlers.models import Privacy_Policy, Special_Equipment_Category, Special_Equipment, \
-    Equipment_Rental_History, Request_Status, Request
-from app.handlers.schemas import RequestStatusBase, RequestCreate, SpecialEquipmentIdFilterName
+    Equipment_Rental_History, Request_Status, Request, CompanyContact
+from app.handlers.schemas import RequestStatusBase, RequestCreate, SpecialEquipmentIdFilterName, CompanyContactFilter
 from app.utils import get_logger
 
 logger = get_logger(__name__)
@@ -81,9 +81,9 @@ class RequestDAO(BaseDAO[Request]):
     async def add(self, values: 'RequestCreate'):
         values_dict = values.model_dump(exclude_unset=True)
         status_dao = RequestStatusDAO(self._session)
-        status = await status_dao.find_one_or_none(filters=RequestStatusBase(name="В работе"))
+        status = await status_dao.find_one_or_none(filters=RequestStatusBase(name="Новая"))
         if not status:
-            raise ValueError("Статус 'В работе' не найден в базе данных")
+            raise ValueError("Статус 'Новая' не найден в базе данных")
         values_dict["status_id"] = status.id
         new_instance = self.model(**values_dict)
         self._session.add(new_instance)
@@ -94,3 +94,28 @@ class RequestDAO(BaseDAO[Request]):
             logger.error(f"Ошибка при flush: {e}")
             raise
         return new_instance
+
+
+class CompanyContactDAO(BaseDAO[CompanyContact]):
+    """Объект доступа к данным (DAO) для управления записями CompanyContact.
+
+    Этот класс предоставляет методы для выполнения CRUD-операций над моделью CompanyContact,
+    которая хранит контактную информацию компании.
+    Наследуется от BaseDAO, обеспечивающего общие операции с базой данных.
+
+    Использование:
+        dao = CompanyContactDAO(session)
+        async with async_session_maker() as session:
+            contact = await dao.add({
+                "company_name": "СпецТехАренда",
+                "phone": "+78001234567",
+                "email": "support@specteharenda.ru",
+                "telegram": "@SpecTehSupport"
+            }, session=session)
+    """
+    model = CompanyContact
+
+    async def get_active_contact(self) -> CompanyContact | None:
+        """Получить активную контактную информацию."""
+        filters = CompanyContactFilter(is_active=True)
+        return await self.find_one_or_none(filters)

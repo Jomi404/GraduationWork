@@ -31,13 +31,21 @@ class Special_Equipment_Category(Base):
         id: int - Уникальный идентификатор категории.
         name: str - Название категории (уникальное).
         description: str - Необязательное описание категории.
+        path_image: str - Путь к изображению категории (по умолчанию: https://iimg.su/i/Tx3v8r).
         created_at: datetime - Временная метка создания категории.
         updated_at: datetime - Временная метка последнего обновления категории.
     """
     __tablename__ = "special_equipment_categories"
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     description: Mapped[str] = mapped_column(Text, nullable=True)
+    path_image: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        default="https://iimg.su/i/Tx3v8r",
+        server_default="https://iimg.su/i/Tx3v8r"
+    )
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP,
@@ -78,7 +86,7 @@ class Special_Equipment(Base):
         nullable=False
     )
     technical_specs: Mapped[dict] = mapped_column(JSONB, nullable=True)
-    image_path: Mapped[str] = mapped_column(String(255), nullable=True)  # <-- Добавлено поле
+    image_path: Mapped[str] = mapped_column(String(255), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -165,3 +173,53 @@ class Request(Base):
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__}(id={self.id}, tg_id={self.tg_id}, status_id={self.status_id})>"
+
+
+class CompanyContact(Base):
+    """Модель для хранения контактной информации компании.
+    Поля:
+        id: int - Уникальный идентификатор записи.
+        company_name: str - Название компании.
+        description: str - Краткое описание компании.
+        phone: str - Контактный телефон.
+        email: str - Контактный email.
+        telegram: str - Ссылка на Telegram-канал или чат поддержки.
+        address: str - Адрес офиса компании.
+        work_hours: str - График работы.
+        website: str - Ссылка на сайт компании (опционально).
+        social_media: str - Ссылки на социальные сети (опционально).
+        requisites: str - Реквизиты компании (опционально).
+        image_url: str - URL изображения для окна контактов (по умолчанию: https://iimg.su/i/7vTQV5).
+        is_active: bool - Флаг активности записи.
+        created_at: datetime - Временная метка создания записи.
+        updated_at: datetime - Временная метка последнего обновления записи.
+    """
+    __tablename__ = "company_contacts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    company_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=True)
+    phone: Mapped[str] = mapped_column(String(20), nullable=False)
+    email: Mapped[str] = mapped_column(String(100), nullable=False)
+    telegram: Mapped[str] = mapped_column(String(100), nullable=False)
+    address: Mapped[str] = mapped_column(String(255), nullable=True)
+    work_hours: Mapped[str] = mapped_column(String(100), nullable=True)
+    website: Mapped[str] = mapped_column(String(255), nullable=True)
+    social_media: Mapped[str] = mapped_column(Text, nullable=True)  # Например, JSON-строка или текст с ссылками
+    requisites: Mapped[str] = mapped_column(Text, nullable=True)  # Например, ИНН, ОГРН
+    image_url: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        default="https://iimg.su/i/7vTQV5",
+        server_default="https://iimg.su/i/7vTQV5"
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP,
+        server_default=func.now(),
+        onupdate=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__}(id={self.id}, company_name={self.company_name})>"

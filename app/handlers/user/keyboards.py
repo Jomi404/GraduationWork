@@ -89,3 +89,75 @@ def paginated_equipment(on_click):
     )
     logger.debug(f"Создана клавиатура с id=equipment_ids, содержит Select")
     return scrolling_group
+
+
+def paginated_requests_by_date(on_click):
+    async def update_request_date_page(event: CallbackQuery, scroll: "ManagedScroll", manager: DialogManager) -> None:
+        try:
+            callback_data = event.data
+            if "request_date_ids:" in callback_data:
+                page_str = callback_data.split("request_date_ids:")[1]
+                page = int(page_str)
+                total_pages = manager.dialog_data.get("total_cancel_date_pages", 1)
+                logger.debug(f"Получено total_pages для заявок по дате: {total_pages}")
+                if 0 <= page < total_pages:
+                    manager.dialog_data["cancel_date_page"] = page
+                    logger.debug(f"Обновлена страница заявок по дате: {page}")
+                else:
+                    logger.warning(f"Попытка установить недопустимую страницу: {page}, всего страниц: {total_pages}")
+            else:
+                logger.error(f"Неверный формат callback_data: {callback_data}")
+        except (ValueError, TypeError, IndexError) as e:
+            logger.error(f"Ошибка при обновлении страницы заявок по дате: {str(e)}")
+
+    return ScrollingGroup(
+        Select(
+            Format("{item[0]}"),
+            id="s_scroll_requests_date",
+            item_id_getter=itemgetter(1),
+            items="requests",
+            on_click=on_click,
+        ),
+        id="request_date_ids",
+        width=1,
+        height=SCROLLING_HEIGHT,
+        hide_on_single_page=True,
+        hide_pager=False,
+        on_page_changed=update_request_date_page,
+    )
+
+
+def paginated_requests_by_equipment(on_click):
+    async def update_request_equipment_page(event: CallbackQuery, scroll: "ManagedScroll", manager: DialogManager) -> None:
+        try:
+            callback_data = event.data
+            if "request_equipment_ids:" in callback_data:
+                page_str = callback_data.split("request_equipment_ids:")[1]
+                page = int(page_str)
+                total_pages = manager.dialog_data.get("total_cancel_equipment_pages", 1)
+                logger.debug(f"Получено total_pages для заявок по спецтехнике: {total_pages}")
+                if 0 <= page < total_pages:
+                    manager.dialog_data["cancel_equipment_page"] = page
+                    logger.debug(f"Обновлена страница заявок по спецтехнике: {page}")
+                else:
+                    logger.warning(f"Попытка установить недопустимую страницу: {page}, всего страниц: {total_pages}")
+            else:
+                logger.error(f"Неверный формат callback_data: {callback_data}")
+        except (ValueError, TypeError, IndexError) as e:
+            logger.error(f"Ошибка при обновлении страницы заявок по спецтехнике: {str(e)}")
+
+    return ScrollingGroup(
+        Select(
+            Format("{item[0]}"),
+            id="s_scroll_requests_equipment",
+            item_id_getter=itemgetter(1),
+            items="requests",
+            on_click=on_click,
+        ),
+        id="request_equipment_ids",
+        width=1,
+        height=SCROLLING_HEIGHT,
+        hide_on_single_page=True,
+        hide_pager=False,
+        on_page_changed=update_request_equipment_page,
+    )

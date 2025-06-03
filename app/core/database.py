@@ -7,14 +7,23 @@ from sqlalchemy import func, TIMESTAMP, Integer, inspect, text
 from sqlalchemy.orm import Mapped, mapped_column, DeclarativeBase, declared_attr
 from sqlalchemy.ext.asyncio import AsyncAttrs, async_sessionmaker, create_async_engine, AsyncSession
 from contextlib import asynccontextmanager
+from asyncpg.exceptions import ConnectionDoesNotExistError
+from sqlalchemy.exc import DBAPIError, PendingRollbackError
 
 from app.config import database_url
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-engine = create_async_engine(url=database_url)
-async_session_maker = async_sessionmaker(engine, class_=AsyncSession)
+
+engine = create_async_engine(
+    url=database_url,
+    pool_size=10,
+    max_overflow=20,
+    pool_timeout=30,
+    pool_recycle=1800,
+)
+async_session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 str_uniq = Annotated[str, mapped_column(unique=True, nullable=False)]
 
 
@@ -25,47 +34,58 @@ async def get_session():
     session = async_session_maker()
     try:
         yield session
+        await session.commit()
+    except (ConnectionDoesNotExistError, DBAPIError, PendingRollbackError) as e:
+        logger.error(f"Ошибка соединения с базой данных: {str(e)}", exc_info=True)
+        try:
+            await session.rollback()
+        except Exception as rollback_err:
+            logger.error(f"Ошибка при откате транзакции: {str(rollback_err)}", exc_info=True)
+        raise
     except Exception as e:
         logger.error(f"Ошибка в сессии базы данных: {str(e)}", exc_info=True)
         await session.rollback()
         raise
     finally:
-        await session.close()
-        logger.debug("Сессия базы данных закрыта")
+        try:
+            await session.close()
+            logger.debug("Сессия базы данных закрыта")
+        except Exception as close_err:
+            logger.error(f"Ошибка при закрытии сессии: {str(close_err)}", exc_info=True)
 
 
 def connection(isolation_level=None):
     def decorator(method):
         @wraps(method)
         async def wrapper(*args, **kwargs):
-            # Извлекаем manager из kwargs, если он есть
-            manager = kwargs.get("manager")
-
-            async with async_session_maker() as session:
+            async with get_session() as session:
                 try:
-                    # Устанавливаем уровень изоляции, если передан
                     if isolation_level:
                         await session.execute(text(f"SET TRANSACTION ISOLATION LEVEL {isolation_level}"))
 
-                    # Если есть manager, добавляем сессию в middleware_data
+                    manager = kwargs.get("manager")
                     if manager and hasattr(manager, "middleware_data"):
                         manager.middleware_data["session"] = session
 
-                    # Добавляем сессию в kwargs, если её там нет
                     if "session" not in kwargs:
                         kwargs["session"] = session
 
-                    # Выполняем декорированный метод
                     result = await method(*args, **kwargs)
-                    await session.commit()
                     return result
+                except (ConnectionDoesNotExistError, DBAPIError, PendingRollbackError) as e:
+                    logger.error(f"Ошибка в транзакции: {str(e)}", exc_info=True)
+                    try:
+                        await session.rollback()
+                    except Exception as rollback_err:
+                        logger.error(f"Ошибка при откате транзакции: {str(rollback_err)}", exc_info=True)
+                    raise
                 except Exception as e:
-                    await session.rollback()  # Откатываем сессию при ошибке
-                    raise e  # Поднимаем исключение дальше
+                    logger.error(f"Ошибка в методе {method.__name__}: {str(e)}", exc_info=True)
+                    await session.rollback()
+                    raise
                 finally:
                     if manager and hasattr(manager, "middleware_data") and "session" in manager.middleware_data:
                         del manager.middleware_data["session"]
-                    await session.close()  # Закрываем сессию
 
         return wrapper
 
@@ -88,33 +108,18 @@ class Base(AsyncAttrs, DeclarativeBase):
         return cls.__name__.lower() + 's'
 
     def to_dict(self, exclude_none: bool = False):
-        """
-        Преобразует объект модели в словарь.
-
-        Args:
-            exclude_none (bool): Исключать ли None значения из результата
-
-        Returns:
-            dict: Словарь с данными объекта
-        """
         result = {}
         for column in inspect(self.__class__).columns:
             value = getattr(self, column.key)
-
-            # Преобразование специальных типов данных
             if isinstance(value, datetime):
                 value = value.isoformat()
             elif isinstance(value, Decimal):
                 value = float(value)
             elif isinstance(value, uuid.UUID):
                 value = str(value)
-
-            # Добавляем значение в результат
             if not exclude_none or value is not None:
                 result[column.key] = value
-
         return result
 
     def __repr__(self) -> str:
-        """Строковое представление объекта для удобства отладки."""
         return f"<{self.__class__.__name__}(id={self.id}, created_at={self.created_at}, updated_at={self.updated_at})>"

@@ -1,7 +1,6 @@
 from aiogram import Router
 from aiogram.enums import ContentType
 from aiogram.filters import Command
-from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, Update, \
     KeyboardButton, ReplyKeyboardMarkup
 from aiogram_dialog import Dialog, DialogManager, Window, StartMode
@@ -13,13 +12,15 @@ from aiogram_dialog.api.exceptions import NoContextError, UnknownIntent
 from pydantic import ValidationError
 
 from app.handlers.user.window import create_confirmation_window, create_rental_calendar_window, enter_phone_getter, \
-    create_request_getter, enter_address_getter
+    create_request_getter, enter_address_getter, create_calendar_view_window, MainDialogStates, \
+    create_cancel_rent_window, create_cancel_by_date_window, create_cancel_by_equipment_window, request_details_window, \
+    confirm_delete_window, confirm_delete_all_window, create_more_menu_window, create_contacts_window
 from app.utils.logging import get_logger
 
 from app.core.database import connection, async_session_maker
 from app.handlers import BaseHandler
-from app.handlers.schemas import TelegramIDModel, SpecialEquipmentCategoryBase, SpecialEquipmentIdFilter,  \
-    RequestCreate, EquipmentRentalHistoryCreate
+from app.handlers.schemas import TelegramIDModel, SpecialEquipmentIdFilter, \
+    RequestCreate, EquipmentRentalHistoryCreate, SpecialEquipmentCategoryId
 from app.handlers.user.dao import AgreePolicyDAO
 from app.handlers.dao import SpecialEquipmentCategoryDAO, SpecialEquipmentDAO, RequestDAO, EquipmentRentalHistoryDAO
 from app.handlers.user.schemas import AgreePolicyModel
@@ -30,23 +31,6 @@ from app.handlers.user.keyboards import paginated_categories, paginated_equipmen
 logger = get_logger(__name__)
 
 
-class MainDialogStates(StatesGroup):
-    action_menu = State()
-    select_category = State()
-    select_equipment = State()
-    view_equipment_details = State()
-    confirm_select_equipment = State()
-    select_date = State()
-    confirm_date = State()
-    enter_phone = State()
-    confirm_phone = State()
-    enter_address = State()
-    confirm_address = State()
-    create_request = State()
-    request_sent = State()
-
-
-# Функция для извлечения пользователя из объекта Update
 def get_user_from_update(event: Update):
     if isinstance(event, Update):
         if event.callback_query:
@@ -99,7 +83,7 @@ async def get_category_name(category_id, session):
         logger.error("Сессия базы данных отсутствует")
         return "Неизвестная категория"
     category_dao = SpecialEquipmentCategoryDAO(session)
-    category = await category_dao.find_one_or_none(SpecialEquipmentCategoryBase(id=category_id))
+    category = await category_dao.find_one_or_none(SpecialEquipmentCategoryId(id=category_id))
     return category.name if category else "Неизвестная категория"
 
 
@@ -140,12 +124,6 @@ async def on_back_to_menu_click(callback: CallbackQuery, button, dialog_manager:
     await callback.answer()
 
 
-async def on_cancel_rent_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
-    logger_my = dialog_manager.middleware_data.get("logger") or logger
-    logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Отмена Аренды'")
-    await callback.message.answer("Вы выбрали 'Отмена Аренды'. Укажите детали отмены. 🚫")
-
-
 async def on_payment_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
     logger_my = dialog_manager.middleware_data.get("logger") or logger
     logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Счета на оплату'")
@@ -154,8 +132,9 @@ async def on_payment_click(callback: CallbackQuery, button, dialog_manager: Dial
 
 async def on_more_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
     logger_my = dialog_manager.middleware_data.get("logger") or logger
-    logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Пополнение'")
-    await callback.message.answer("Вы выбрали 'Пополнение'. Укажите сумму для пополнения. 💰")
+    logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Подробнее'")
+    await dialog_manager.switch_to(MainDialogStates.more_menu)
+    await callback.answer()
 
 
 async def on_exit_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
@@ -276,16 +255,40 @@ async def on_send_request_click(callback: CallbackQuery, button: Button, dialog_
     await callback.answer()
 
 
+async def on_cancel_rent_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
+    logger_my = dialog_manager.middleware_data.get("logger") or logger
+    logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Отмена Аренды'")
+    await dialog_manager.start(
+        state=MainDialogStates.cancel_rent,
+        mode=StartMode.RESET_STACK
+    )
+    await callback.answer()
+
+
+async def on_more_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
+    logger_my = dialog_manager.middleware_data.get("logger") or logger
+    logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Подробнее'")
+    await dialog_manager.switch_to(MainDialogStates.more_menu)
+    await callback.answer()
+
+
 def main_dialog() -> Dialog:
     confirm_select_equipment_window = create_confirmation_window(
         text="Вы уверены, что хотите арендовать эту технику?",
         intermediate_state=MainDialogStates.confirm_select_equipment,
-        next_state=MainDialogStates.select_date,
+        next_state=MainDialogStates.select_date_buttons,
         fields=["equipment_name", "rental_price"],
         formats=[
             "Техника: {equipment_name}",
             "Цена аренды: {rental_price} руб/час",
-        ]
+        ],
+        use_equipment_image=True
+    )
+
+    select_date_buttons_window = create_rental_calendar_window(
+        state=MainDialogStates.select_date_buttons,
+        calendar_state=MainDialogStates.select_date,
+        confirm_state=MainDialogStates.confirm_date
     )
 
     confirm_date_window = create_confirmation_window(
@@ -294,6 +297,11 @@ def main_dialog() -> Dialog:
         next_state=MainDialogStates.enter_phone,
         fields=["equipment_name", "selected_date"],
         formats=["Техника: {equipment_name}", "Вы выбрали дату: {selected_date}"]
+    )
+
+    calendar_view_window = create_calendar_view_window(
+        state=MainDialogStates.select_date,
+        confirm_state=MainDialogStates.confirm_date
     )
 
     confirm_phone_window = create_confirmation_window(
@@ -314,7 +322,7 @@ def main_dialog() -> Dialog:
 
     view_equipment_details_window = Window(
         StaticMedia(
-            url="https://iimg.su/i/7vTQV5",
+            url=Format("{image_path}"),
             type=ContentType.PHOTO
         ),
         Format("Техника: {equipment_name}"),
@@ -332,12 +340,9 @@ def main_dialog() -> Dialog:
             url="https://iimg.su/i/7vTQV5",
             type=ContentType.PHOTO
         ),
-        # Отображение ошибки, если она есть
         Format("{error_message}", when="error_message"),
-        # Отображение техники и даты, если ошибки нет
         Format("Техника: {equipment_name}", when=no_err_filter),
         Format("Дата: {selected_date}", when=no_err_filter),
-        # Отображение начального текста, если ошибки нет
         Format(
             "Введите номер телефона ниже\nили используйте кнопку 'Отправить номер'.",
             when=no_err_filter
@@ -397,6 +402,26 @@ def main_dialog() -> Dialog:
         state=MainDialogStates.request_sent,
     )
 
+    cancel_rent_window = create_cancel_rent_window(
+        state=MainDialogStates.cancel_rent
+    )
+
+    cancel_by_date_window = create_cancel_by_date_window(
+        state=MainDialogStates.cancel_by_date
+    )
+
+    cancel_by_equipment_window = create_cancel_by_equipment_window(
+        state=MainDialogStates.cancel_by_equipment
+    )
+
+    more_menu_window = create_more_menu_window(
+        state=MainDialogStates.more_menu
+    )
+
+    contacts_window = create_contacts_window(
+        state=MainDialogStates.contacts
+    )
+
     return Dialog(
         Window(
             Const("Главное меню"),
@@ -426,7 +451,7 @@ def main_dialog() -> Dialog:
         ),
         Window(
             StaticMedia(
-                url="https://iimg.su/i/7vTQV5",
+                url=Format("{path_image}"),
                 type=ContentType.PHOTO
             ),
             Const("Выберите интересующую модель спецтехники:"),
@@ -439,7 +464,7 @@ def main_dialog() -> Dialog:
         ),
         view_equipment_details_window,
         confirm_select_equipment_window,
-        create_rental_calendar_window(MainDialogStates.select_date, MainDialogStates.confirm_date),
+        select_date_buttons_window,
         confirm_date_window,
         enter_phone_window,
         confirm_phone_window,
@@ -447,6 +472,15 @@ def main_dialog() -> Dialog:
         confirm_address_window,
         create_request_window,
         request_sent_window,
+        calendar_view_window,
+        cancel_rent_window,
+        cancel_by_date_window,
+        cancel_by_equipment_window,
+        request_details_window,
+        confirm_delete_window,
+        confirm_delete_all_window,
+        more_menu_window,
+        contacts_window
     )
 
 

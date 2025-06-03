@@ -7,8 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
 from app.core.database import connection, get_session
+from app.handlers.models import Special_Equipment_Category, Special_Equipment
 from app.handlers.schemas import TelegramIDModel, PrivacyPolicyFilter, SpecialEquipmentCategoryCatId, \
-    SpecialEquipmentIdFilter, SpecialEquipmentIdFilterName
+    SpecialEquipmentIdFilter, SpecialEquipmentIdFilterName, SpecialEquipmentCategoryId
 from app.handlers.user.dao import AgreePolicyDAO
 from app.handlers.dao import PrivacyPolicyDAO, SpecialEquipmentCategoryDAO, SpecialEquipmentDAO, \
     EquipmentRentalHistoryDAO
@@ -66,13 +67,15 @@ async def async_get_category_buttons(dialog_manager: DialogManager, **kwargs) ->
     else:
         async with get_session() as session:
             category_dao = SpecialEquipmentCategoryDAO(session)
-            categories = await category_dao.find_all()
+            # Добавляем сортировку по id в порядке возрастания
+            categories = await category_dao.find_all(order_by=Special_Equipment_Category.id.asc())
             all_categories = [
                 (category.name, category.id) for category in categories
                 if hasattr(category, 'id') and hasattr(category, 'name')
             ]
             active_logger.debug(f"Загруженные категории из базы данных: {all_categories}")
-            dialog_manager.dialog_data[cache_key] = sorted(all_categories, key=lambda x: x[1])
+            # Сортировка на уровне Python больше не нужна, так как данные уже отсортированы
+            dialog_manager.dialog_data[cache_key] = all_categories
             active_logger.debug(f"Кэшированы все категории: {all_categories}")
 
     total_categories = len(all_categories)
@@ -109,27 +112,42 @@ async def async_get_equipment_buttons(dialog_manager: DialogManager, **kwargs) -
     category_id = dialog_manager.start_data.get("category_id")
     if not category_id:
         logger_my.error("category_id is missing in start_data")
-        return {"equipment": [], "total_pages": 1}
+        return {"equipment": [], "total_pages": 1, "path_image": "https://iimg.su/i/Tx3v8r"}
 
     items_per_page = 5
     cache_key = f"cached_equipment_{category_id}"
     pages_key = f"total_equipment_pages_{category_id}"
+    image_key = f"category_image_{category_id}"
 
     if cache_key not in dialog_manager.dialog_data:
         async with get_session() as session:
             equipment_dao = SpecialEquipmentDAO(session)
+            # Добавляем сортировку по id в порядке возрастания
             equipment = await equipment_dao.find_all(
-                SpecialEquipmentCategoryCatId(category_id=category_id)
+                SpecialEquipmentCategoryCatId(category_id=category_id),
+                order_by=Special_Equipment.id.asc()
             )
             all_equipment = [(equip.name, str(equip.id)) for equip in equipment]
             dialog_manager.dialog_data[cache_key] = all_equipment
             total_pages = (len(all_equipment) + items_per_page - 1) // items_per_page
             dialog_manager.dialog_data[pages_key] = total_pages
+
+            # Получаем path_image для категории
+            category_dao = SpecialEquipmentCategoryDAO(session)
+            category = await category_dao.find_one_or_none(SpecialEquipmentCategoryId(id=category_id))
+            path_image = category.path_image if category else "https://iimg.su/i/Tx3v8r"
+            dialog_manager.dialog_data[image_key] = path_image
+            logger_my.debug(f"Получен path_image для category_id={category_id}: {path_image}")
     else:
         all_equipment = dialog_manager.dialog_data[cache_key]
         total_pages = dialog_manager.dialog_data[pages_key]
+        path_image = dialog_manager.dialog_data.get(image_key, "https://iimg.su/i/Tx3v8r")
 
-    return {"equipment": all_equipment, "total_pages": total_pages}
+    return {
+        "equipment": all_equipment,
+        "total_pages": total_pages,
+        "path_image": path_image
+    }
 
 
 async def async_get_equipment_details(dialog_manager: DialogManager, **kwargs) -> dict:
@@ -141,40 +159,58 @@ async def async_get_equipment_details(dialog_manager: DialogManager, **kwargs) -
 
     if not equipment_id:
         logger_my.error("equipment_id is missing in start_data")
-        return {"equipment_name": "Неизвестно", "rental_price": 0, "description": "Нет данных"}
+        return {
+            "equipment_name": "Неизвестно",
+            "rental_price": 0,
+            "description": "Нет данных",
+            "image_path": "https://iimg.su/i/7vTQV5"  # Значение по умолчанию
+        }
 
     async with get_session() as session:
         equipment_dao = SpecialEquipmentDAO(session)
         equipment = await equipment_dao.find_one_or_none(SpecialEquipmentIdFilter(id=equipment_id))
         if not equipment:
             logger_my.error(f"Техника с id={equipment_id} не найдена")
-            return {"equipment_name": "Неизвестно", "rental_price": 0, "description": "Нет данных"}
+            return {
+                "equipment_name": "Неизвестно",
+                "rental_price": 0,
+                "description": "Нет данных",
+                "image_path": "https://iimg.su/i/7vTQV5"  # Значение по умолчанию
+            }
 
-        dialog_manager.dialog_data.update({"equipment_name": equipment.name,
-                                           "rental_price": float(equipment.rental_price_per_day)})
+        dialog_manager.dialog_data.update({
+            "equipment_name": equipment.name,
+            "rental_price": float(equipment.rental_price_per_day)
+        })
+
+        # Используем image_path из базы данных или значение по умолчанию, если image_path отсутствует
+        image_path = equipment.image_path if equipment.image_path else "https://iimg.su/i/7vTQV5"
 
         return {
             "equipment_name": equipment.name,
             "rental_price": float(equipment.rental_price_per_day),
-            "description": equipment.description or "Нет описания"
+            "description": equipment.description or "Нет описания",
+            "image_path": image_path
         }
 
 
-async def check_equipment_availability(equipment_name: str, session: AsyncSession) -> dict:
+async def check_equipment_availability(equipment_name: str, session: AsyncSession, start_date: datetime = None, end_date: datetime = None) -> dict:
     """
-    Проверяет доступность техники на текущую неделю, начиная с текущего дня.
+    Проверяет доступность техники для указанного диапазона дат.
 
     Args:
         equipment_name (str): Название техники.
         session (AsyncSession): Сессия базы данных.
+        start_date (datetime, optional): Начало диапазона проверки. По умолчанию текущий день.
+        end_date (datetime, optional): Конец диапазона проверки. По умолчанию конец текущей недели.
 
     Returns:
         dict: Словарь с информацией о доступности:
               - is_available (bool): Доступна ли техника.
-              - available_dates (list): Список доступных дат в формате ISO (только текущие и будущие даты).
+              - available_dates (list): Список доступных дат в формате ISO.
               - message (str): Сообщение о статусе доступности.
     """
-    logger.debug(f"Проверка доступности техники: {equipment_name}")
+    logger.debug(f"Проверка доступности техники: {equipment_name} для диапазона {start_date} - {end_date}")
     try:
         # Получаем ID техники по имени
         equipment_dao = SpecialEquipmentDAO(session)
@@ -188,11 +224,14 @@ async def check_equipment_availability(equipment_name: str, session: AsyncSessio
                 "message": f"Техника {equipment_name} не найдена"
             }
 
-        # Определяем текущую дату и конец текущей недели (воскресенье)
+        # Устанавливаем диапазон дат
         today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        days_since_monday = today.weekday()  # 0 для понедельника, 1 для вторника и т.д.
-        monday = today - timedelta(days=days_since_monday)
-        sunday = monday + timedelta(days=6)
+        if start_date is None:
+            start_date = today
+        if end_date is None:
+            days_since_monday = today.weekday()
+            monday = today - timedelta(days=days_since_monday)
+            end_date = monday + timedelta(days=6)  # Конец текущей недели
 
         # Получаем записи об аренде для техники
         rental_dao = EquipmentRentalHistoryDAO(session)
@@ -200,15 +239,15 @@ async def check_equipment_availability(equipment_name: str, session: AsyncSessio
         rentals = [
             rental for rental in rentals
             if rental.equipment_id == equipment.id
-               and rental.start_date <= sunday
-               and (rental.end_date is None or rental.end_date >= monday)
+               and rental.start_date <= end_date
+               and (rental.end_date is None or rental.end_date >= start_date)
         ]
 
         logger.debug(
             f"Найденные записи об аренде для {equipment_name}: {[(r.start_date, r.end_date) for r in rentals]}")
 
-        # Создаем список дат, начиная с сегодняшнего дня до воскресенья
-        all_dates = [today + timedelta(days=i) for i in range((sunday - today).days + 1)]
+        # Создаем список дат для проверки
+        all_dates = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
         available_dates = []
 
         # Проверяем каждую дату на доступность
@@ -216,9 +255,8 @@ async def check_equipment_availability(equipment_name: str, session: AsyncSessio
             is_date_available = True
             for rental in rentals:
                 rental_start = rental.start_date.replace(hour=0, minute=0, second=0, microsecond=0)
-                rental_end = (rental.end_date or sunday).replace(hour=0, minute=0, second=0, microsecond=0)
+                rental_end = (rental.end_date or end_date).replace(hour=0, minute=0, second=0, microsecond=0)
 
-                # Проверяем, пересекается ли дата с периодом аренды
                 if rental_start <= date <= rental_end:
                     is_date_available = False
                     logger.debug(f"Дата {date} занята: аренда с {rental_start} по {rental_end}")
@@ -230,9 +268,9 @@ async def check_equipment_availability(equipment_name: str, session: AsyncSessio
 
         is_available = len(available_dates) > 0
         message = (
-            f"Техника {equipment_name} доступна для аренды на текущей неделе"
+            f"Техника {equipment_name} доступна для аренды в указанный период"
             if is_available
-            else f"Техника {equipment_name} занята на текущей неделе"
+            else f"Техника {equipment_name} занята в указанный период"
         )
 
         logger.info(f"Результат проверки доступности {equipment_name}: {message}")
@@ -257,11 +295,11 @@ def validate_phone_number(phone: str) -> Optional[str]:
     digits = re.sub(r'\D', '', phone)
     # Проверяем различные варианты ввода
     if len(digits) == 11 and digits[0] in ['7', '8']:
-        return '+7' + digits[1:]  # Например, 89930057019 -> +79930057019
+        return '+7' + digits[1:]
     elif len(digits) == 10:
-        return '+7' + digits  # Например, 9930057019 -> +79930057019
+        return '+7' + digits
     elif len(digits) == 12 and digits.startswith('7'):
-        return '+' + digits  # Например, +79930057019 -> +79930057019
+        return '+' + digits
     else:
         return None
 

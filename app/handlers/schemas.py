@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional, Dict
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, HttpUrl
 
 
 class TelegramIDModel(BaseModel):
@@ -17,37 +17,41 @@ class PrivacyPolicyFilter(BaseModel):
 
 
 class SpecialEquipmentCategoryBase(BaseModel):
-    # Базовая схема для общих полей категории спецтехники.
-    # Используется для избежания дублирования кода в Create, Update, Read схемах.
-    id: int
+    """Базовая схема для общих полей категории спецтехники.
+    Используется для избежания дублирования кода в Create, Update, Read схемах.
+    """
     description: Optional[str] = None
+    path_image: Optional[str] = "https://iimg.su/i/Tx3v8r"
 
 
 class SpecialEquipmentCategoryCreate(SpecialEquipmentCategoryBase):
-    # Схема для создания новой категории спецтехники.
-    # Используется в POST-запросах для валидации входных данных.
-    # Требует name (обязательное поле) и опционально description.
-    # Пример: {"name": "Экскаваторы", "description": "Гусеничные и колесные экскаваторы"}
+    """Схема для создания новой категории спецтехники.
+    Используется в POST-запросах для валидации входных данных.
+    Требует name (обязательное поле), опционально description и path_image.
+    Пример: {"name": "Экскаваторы", "description": "Гусеничные и колесные экскаваторы", "path_image": "https://iimg.su/i/Tx3v8r"}
+    """
     name: str
     model_config = ConfigDict(from_attributes=True)
 
 
 class SpecialEquipmentCategoryUpdate(SpecialEquipmentCategoryBase):
-    # Схема для обновления существующей категории спецтехники.
-    # Используется в PATCH/PUT-запросах для частичного или полного обновления.
-    # Все поля опциональны, чтобы клиент мог обновить только часть данных.
-    # Пример: {"name": "Новые экскаваторы"} обновит только название.
+    """Схема для обновления существующей категории спецтехники.
+    Используется в PATCH/PUT-запросах для частичного или полного обновления.
+    Все поля опциональны, чтобы клиент мог обновить только часть данных.
+    Пример: {"name": "Новые экскаваторы", "path_image": "https://iimg.su/i/NewImage"}
+    """
     name: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 
 class SpecialEquipmentCategoryRead(SpecialEquipmentCategoryBase):
-    # Схема для чтения данных о категории спецтехники. Используется в GET-запросах для сериализации ответа API.
-    # Включает автоматически генерируемые поля (id, created_at, updated_at). Пример ответа: {"id": 1,
-    # "name": "Экскаваторы", "description": null, "created_at": "2025-05-19T07:30:00", "updated_at":
-    # "2025-05-19T07:30:00"}
+    """Схема для чтения данных о категории спецтехники.
+    Используется в GET-запросах для сериализации ответа API.
+    Включает автоматически генерируемые поля (id, created_at, updated_at).
+    Пример ответа: {"id": 1, "name": "Экскаваторы", "description": null, "path_image": "https://iimg.su/i/Tx3v8r", "created_at": "2025-05-19T07:30:00", "updated_at": "2025-05-19T07:30:00"}
+    """
     id: int
-    name: Optional[str] = None
+    name: str
     created_at: datetime
     updated_at: datetime
     model_config = ConfigDict(from_attributes=True)
@@ -206,4 +210,63 @@ class RequestRead(RequestBase):
     id: int
     created_at: datetime
     updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RequestFilter(BaseModel):
+    id: Optional[int] = None
+    tg_id: Optional[int] = None
+    status_id: Optional[int] = None
+
+
+class CompanyContactBase(BaseModel):
+    """Базовая схема для общих полей контактной информации компании."""
+    company_name: str
+    description: Optional[str] = None
+    phone: str
+    email: str
+    telegram: str
+    address: Optional[str] = None
+    work_hours: Optional[str] = None
+    website: Optional[HttpUrl] = None
+    social_media: Optional[str] = None
+    requisites: Optional[str] = None
+    image_url: Optional[HttpUrl] = "https://iimg.su/i/7vTQV5"
+
+
+class CompanyContactCreate(CompanyContactBase):
+    """Схема для создания новой записи контактной информации."""
+    is_active: bool = True
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CompanyContactUpdate(BaseModel):
+    """Схема для обновления контактной информации."""
+    company_name: Optional[str] = None
+    description: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    telegram: Optional[str] = None
+    address: Optional[str] = None
+    work_hours: Optional[str] = None
+    website: Optional[HttpUrl] = None
+    social_media: Optional[str] = None
+    requisites: Optional[str] = None
+    image_url: Optional[HttpUrl] = None
+    is_active: Optional[bool] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CompanyContactRead(CompanyContactBase):
+    """Схема для чтения контактной информации."""
+    id: int
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CompanyContactFilter(BaseModel):
+    """Схема для фильтрации контактной информации."""
+    is_active: Optional[bool] = True
     model_config = ConfigDict(from_attributes=True)
