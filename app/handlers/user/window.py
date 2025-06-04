@@ -927,7 +927,7 @@ request_details_window = Window(
     Format("Username: @{username}"),
     Format("Статус: {status}"),
     Button(Const("Удалить заявку 🗑️"), id="delete_request", on_click=on_delete_request_click),
-    Back(text=Const("Назад")),
+    SwitchTo(text=Const("Выбрать способ отмены аренды"), state=MainDialogStates.cancel_rent, id='back_menu_cancel'),
     state=MainDialogStates.view_request_details,
     getter=request_details_getter
 )

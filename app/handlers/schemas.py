@@ -115,12 +115,13 @@ class EquipmentRentalHistoryBase(BaseModel):
     start_date: datetime
     end_date: Optional[datetime] = None
     rental_price_at_time: Decimal
+    total_work_time: Optional[str] = None  # Формат HH:MM, опционально
 
 
 class EquipmentRentalHistoryCreate(EquipmentRentalHistoryBase):
     # Схема для создания новой записи об аренде.
     # Используется в POST-запросах для валидации входных данных.
-    # Требует equipment_id, start_date, rental_price_at_time; end_date опционально.
+    # Требует equipment_id, start_date, rental_price_at_time; end_date и total_work_time опциональны.
     # Пример: {"equipment_id": 1, "start_date": "2025-05-19T08:00:00", "rental_price_at_time": 500.00}
     model_config = ConfigDict(from_attributes=True)
 
@@ -129,18 +130,20 @@ class EquipmentRentalHistoryUpdate(EquipmentRentalHistoryBase):
     # Схема для обновления записи об аренде.
     # Используется в PATCH/PUT-запросах для частичного или полного обновления.
     # Все поля опциональны для гибкого обновления.
-    # Пример: {"end_date": "2025-05-20T08:00:00"} завершит аренду.
+    # Пример: {"end_date": "2025-05-20T08:00:00", "total_work_time": "12:30"}
     equipment_id: Optional[int] = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     rental_price_at_time: Optional[Decimal] = None
+    total_work_time: Optional[str] = None  # Формат HH:MM, опционально
     model_config = ConfigDict(from_attributes=True)
 
 
 class EquipmentRentalHistoryRead(EquipmentRentalHistoryBase):
-    # Схема для чтения данных об аренде. Используется в GET-запросах для сериализации ответа API. Включает id и
-    # created_at для полной информации. Пример ответа: {"id": 1, "equipment_id": 1, "start_date":
-    # "2025-05-19T08:00:00", "end_date": null, "rental_price_at_time": 500.00, ...}
+    # Схема для чтения данных об аренде.
+    # Используется в GET-запросах для сериализации ответа API.
+    # Включает id и created_at для полной информации.
+    # Пример ответа: {"id": 1, "equipment_id": 1, "start_date": "2025-05-19T08:00:00", "end_date": null, "rental_price_at_time": 500.00, "total_work_time": "12:30", ...}
     id: int
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)

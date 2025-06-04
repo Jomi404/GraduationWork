@@ -123,16 +123,15 @@ class Equipment_Rental_History(Base):
     start_date: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False)
     end_date: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=True)
     rental_price_at_time: Mapped[DECIMAL] = mapped_column(Numeric(10, 2), nullable=False)
+    total_work_time: Mapped[str] = mapped_column(String(5), nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
 
-    # Связь с таблицей Special_Equipment
     equipment: Mapped["Special_Equipment"] = relationship(back_populates="rental_history")
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__}(id={self.id}, equipment_id={self.equipment_id})>"
 
 
-# Определение индексов
 Index("idx_equipment_category_id", Special_Equipment.category_id)
 Index("idx_rental_history_equipment_id", Equipment_Rental_History.equipment_id)
 Index("idx_rental_history_dates", Equipment_Rental_History.start_date, Equipment_Rental_History.end_date)
