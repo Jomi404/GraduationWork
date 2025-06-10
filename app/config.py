@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     db_port: str = Field(default="8000")
     db_name: str = Field(default="postgresql")
     telegram_token: str
+    provider_token: str
+    currency: str
 
     @property
     def DB_URL(self) -> str:
@@ -20,6 +22,5 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=f"{BASE_DIR}/.env")
 
 
-# ѕолучаем параметры дл€ загрузки переменных среды
 settings = Settings()
 database_url = settings.DB_URL

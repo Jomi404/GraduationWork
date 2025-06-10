@@ -1,8 +1,13 @@
+import asyncio
+from datetime import datetime
+from decimal import Decimal
+
 from aiogram import Router
+from aiogram import F
 from aiogram.enums import ContentType
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, Update, \
-    KeyboardButton, ReplyKeyboardMarkup
+    KeyboardButton, ReplyKeyboardMarkup, PreCheckoutQuery
 from aiogram_dialog import Dialog, DialogManager, Window, StartMode
 from aiogram_dialog.widgets.input import MessageInput
 from aiogram_dialog.widgets.kbd import Button, SwitchTo, Cancel, Back
@@ -11,18 +16,24 @@ from aiogram_dialog.widgets.text import Const, Format
 from aiogram_dialog.api.exceptions import NoContextError, UnknownIntent
 from pydantic import ValidationError
 
+from app.handlers.models import PaymentTransaction
 from app.handlers.user.window import create_confirmation_window, create_rental_calendar_window, enter_phone_getter, \
     create_request_getter, enter_address_getter, create_calendar_view_window, MainDialogStates, \
     create_cancel_rent_window, create_cancel_by_date_window, create_cancel_by_equipment_window, request_details_window, \
-    confirm_delete_window, confirm_delete_all_window, create_more_menu_window, create_contacts_window
+    confirm_delete_window, confirm_delete_all_window, create_more_menu_window, create_contacts_window, \
+    create_pending_payment_window, create_payment_window, create_paid_invoices_window, \
+    create_paid_invoice_details_window, create_my_requests_window, create_requests_in_progress_window, \
+    create_requests_completed_window, create_request_details_window
 from app.utils.logging import get_logger
 
 from app.core.database import connection, async_session_maker
 from app.handlers import BaseHandler
 from app.handlers.schemas import TelegramIDModel, SpecialEquipmentIdFilter, \
-    RequestCreate, EquipmentRentalHistoryCreate, SpecialEquipmentCategoryId
+    RequestCreate, EquipmentRentalHistoryCreate, SpecialEquipmentCategoryId, RequestStatusBase, RequestFilter, \
+    RequestUpdate
 from app.handlers.user.dao import AgreePolicyDAO
-from app.handlers.dao import SpecialEquipmentCategoryDAO, SpecialEquipmentDAO, RequestDAO, EquipmentRentalHistoryDAO
+from app.handlers.dao import SpecialEquipmentCategoryDAO, SpecialEquipmentDAO, RequestDAO, EquipmentRentalHistoryDAO, \
+    PaymentTransactionDAO, RequestStatusDAO
 from app.handlers.user.schemas import AgreePolicyModel
 from app.handlers.user.utils import AgreePolicyFilter, get_active_policy_url, async_get_category_buttons, \
     async_get_equipment_buttons, async_get_equipment_details, validate_phone_number, no_err_filter
@@ -124,10 +135,14 @@ async def on_back_to_menu_click(callback: CallbackQuery, button, dialog_manager:
     await callback.answer()
 
 
-async def on_payment_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
+async def on_pending_payment_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
     logger_my = dialog_manager.middleware_data.get("logger") or logger
-    logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Счета на оплату'")
-    await callback.message.answer("Вы выбрали 'Счета на оплату'. Вот ваши счета... 💸")
+    logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Заявки на оплату'")
+    await dialog_manager.start(
+        state=MainDialogStates.pending_payment_requests,
+        mode=StartMode.NORMAL
+    )
+    await callback.answer()
 
 
 async def on_more_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
@@ -269,6 +284,26 @@ async def on_more_click(callback: CallbackQuery, button, dialog_manager: DialogM
     logger_my = dialog_manager.middleware_data.get("logger") or logger
     logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Подробнее'")
     await dialog_manager.switch_to(MainDialogStates.more_menu)
+    await callback.answer()
+
+
+async def on_paid_invoices_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
+    logger_my = dialog_manager.middleware_data.get("logger") or logger
+    logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Оплаченные счета'")
+    await dialog_manager.start(
+        state=MainDialogStates.paid_invoices,
+        mode=StartMode.NORMAL
+    )
+    await callback.answer()
+
+
+async def on_my_requests_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
+    logger_my = dialog_manager.middleware_data.get("logger") or logger
+    logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Мои заявки'")
+    await dialog_manager.start(
+        state=MainDialogStates.my_requests,
+        mode=StartMode.NORMAL
+    )
     await callback.answer()
 
 
@@ -421,6 +456,19 @@ def main_dialog() -> Dialog:
     contacts_window = create_contacts_window(
         state=MainDialogStates.contacts
     )
+    pending_payment_window = create_pending_payment_window(
+        state=MainDialogStates.pending_payment_requests
+    )
+    payment_window = create_payment_window(
+        state=MainDialogStates.payment_details
+    )
+
+    paid_invoices_window = create_paid_invoices_window(MainDialogStates.paid_invoices)
+    paid_invoice_details_window = create_paid_invoice_details_window(MainDialogStates.paid_invoice_details)
+    my_requests_window = create_my_requests_window(MainDialogStates.my_requests)
+    requests_in_progress_window = create_requests_in_progress_window(MainDialogStates.requests_in_progress)
+    requests_completed_window = create_requests_completed_window(MainDialogStates.requests_completed)
+    request_details_window_n = create_request_details_window(MainDialogStates.request_details)
 
     return Dialog(
         Window(
@@ -432,7 +480,9 @@ def main_dialog() -> Dialog:
             Const("Выберите, что вы хотите сделать:"),
             Button(Const("Аренда"), id="rent", on_click=on_rent_click),
             Button(Const("Отмена Аренды"), id="cancel_rent", on_click=on_cancel_rent_click),
-            Button(Const("Счета на оплату"), id="payment", on_click=on_payment_click),
+            Button(Const("Счета на оплату"), id="payment", on_click=on_pending_payment_click),
+            Button(Const("Оплаченные счета"), id="paid_invoices", on_click=on_paid_invoices_click),
+            Button(Const("Мои заявки"), id="my_requests", on_click=on_my_requests_click),
             Button(Const("Подробнее"), id="more", on_click=on_more_click),
             Button(Const("Выйти"), id="exit", on_click=on_exit_click),
             state=MainDialogStates.action_menu,
@@ -480,7 +530,15 @@ def main_dialog() -> Dialog:
         confirm_delete_window,
         confirm_delete_all_window,
         more_menu_window,
-        contacts_window
+        contacts_window,
+        pending_payment_window,
+        payment_window,
+        paid_invoices_window,
+        paid_invoice_details_window,
+        my_requests_window,
+        requests_in_progress_window,
+        requests_completed_window,
+        request_details_window_n,
     )
 
 
@@ -523,24 +581,23 @@ class UserHandler(BaseHandler):
         self.dp.message(~AgreePolicyFilter())(self.on_no_policy_agreement)
         self.dp.callback_query(lambda c: c.data == "agree_policy")(on_agree_policy_click)
 
+        self.dp.pre_checkout_query(lambda query: True)(handle_pre_checkout_query)
+        self.dp.message(F.content_type == ContentType.SUCCESSFUL_PAYMENT)(handle_successful_payment)
+        self.dp.callback_query(lambda c: c.data == "cancel_invoice")(cancel_invoice_handler)
+
     async def set_logger_middleware(self, handler, event, data: dict):
         try:
             data["logger"] = self.logger
             return await handler(event, data)
         except UnknownIntent as e:
-            # Извлекаем intent_id из сообщения об ошибке
             error_message = str(e)
             intent_id = error_message.split("intent id: ")[-1] if "intent id: " in error_message else "unknown"
-            # Извлекаем пользователя из события
             user = get_user_from_update(event)
             user_id = user.id if user else "unknown"
-            # Добавляем отладку для проверки типа события
             self.logger.debug(f"Тип события: {type(event)}, содержимое: {event}")
-            # Обработка устаревшего контекста
             self.logger.warning(
                 f"Устаревший контекст для intent_id={intent_id}, пользователь={user_id}. Сбрасываем диалог.")
 
-            # Извлекаем сообщение для редактирования или удаления
             message = None
             if isinstance(event, Update) and event.callback_query:
                 self.logger.debug(f"Событие является Update с CallbackQuery, извлекаем сообщение")
@@ -551,11 +608,9 @@ class UserHandler(BaseHandler):
             else:
                 self.logger.debug(f"Событие не является CallbackQuery, редактирование сообщения невозможно")
 
-            # Проверяем наличие dialog_manager для сброса диалога
             dialog_manager = data.get("dialog_manager")
             self.logger.debug(f"dialog_manager: {dialog_manager}")
 
-            # Удаляем сообщение, если оно доступно
             if message:
                 self.logger.debug(f"Сообщение найдено: message_id={message.message_id}, chat_id={message.chat.id}")
                 try:
@@ -565,11 +620,9 @@ class UserHandler(BaseHandler):
                 except Exception as delete_error:
                     self.logger.warning(f"Не удалось удалить сообщение: {str(delete_error)}")
 
-            # Редактируем сообщение или уведомляем пользователя
             if message:
                 try:
                     if dialog_manager:
-                        # Если dialog_manager доступен, сбрасываем диалог
                         try:
                             await dialog_manager.reset_stack()
                             dialog_manager.dialog_data.clear()
@@ -613,7 +666,6 @@ class UserHandler(BaseHandler):
                     except Exception as answer_error:
                         self.logger.error(f"Не удалось отправить новое сообщение: {str(answer_error)}")
             else:
-                # Если сообщение недоступно, отправляем новое сообщение
                 self.logger.warning("Сообщение для редактирования недоступно, отправляем новое уведомление")
                 try:
                     if isinstance(event, Update) and event.callback_query:
@@ -644,7 +696,7 @@ class UserHandler(BaseHandler):
                 except Exception as answer_error:
                     self.logger.error(f"Не удалось отправить новое сообщение: {str(answer_error)}")
 
-            return None  # Прерываем обработку, так как контекст устарел
+            return None
         except Exception as e:
             self.logger.error(f"Ошибка в middleware: {str(e)}", exc_info=True)
             raise
@@ -673,7 +725,6 @@ class UserHandler(BaseHandler):
         else:
             self.logger.warning("FSM-хранилище недоступно, не можем удалить старое сообщение с меню")
 
-        # Запускаем новый диалог
         await dialog_manager.start(state=MainDialogStates.action_menu, mode=StartMode.RESET_STACK)
 
     @connection()
@@ -694,3 +745,85 @@ class UserHandler(BaseHandler):
                  "Тогда функционал бота станет доступен.",
             reply_markup=keyboard
         )
+
+
+@connection()
+async def handle_pre_checkout_query(pre_checkout_query: PreCheckoutQuery, bot, session) -> None:
+    logger.info(f"Получен предварительный запрос на оплату: {pre_checkout_query.id}")
+
+    try:
+        if pre_checkout_query.invoice_payload.startswith("request_"):
+            await bot.answer_pre_checkout_query(
+                pre_checkout_query_id=pre_checkout_query.id,
+                ok=True
+            )
+            logger.debug(f"Успешно подтвержден предварительный запрос: {pre_checkout_query.id}")
+        else:
+            await bot.answer_pre_checkout_query(
+                pre_checkout_query_id=pre_checkout_query.id,
+                ok=False,
+                error_message="Неверный идентификатор заказа."
+            )
+    except Exception as e:
+        logger.error(f"Ошибка при обработке предварительного запроса: {e}")
+        await bot.answer_pre_checkout_query(
+            pre_checkout_query_id=pre_checkout_query.id,
+            ok=False,
+            error_message="Ошибка при подтверждении оплаты."
+        )
+
+
+@connection()
+async def handle_successful_payment(message: Message, bot, session, **kwargs) -> None:
+    successful_payment = message.successful_payment
+    logger.info(f"Получено уведомление об успешной оплате: {successful_payment.order_info}")
+
+    payload = successful_payment.invoice_payload
+    if not payload.startswith("request_"):
+        logger.error(f"Неверный payload в успешной оплате: {payload}")
+        return
+
+    request_id = int(payload.replace("request_", ""))
+    provider_payment_charge_id = successful_payment.provider_payment_charge_id
+    telegram_id = message.from_user.id  # Получаем telegram_id из сообщения
+
+    payment_dao = PaymentTransactionDAO(session)
+    payment_transaction = PaymentTransaction(
+        request_id=request_id,
+        telegram_id=telegram_id,  # Добавляем telegram_id
+        transaction_id=provider_payment_charge_id,
+        amount=Decimal(str(successful_payment.total_amount / 100.0)),
+        status="success",
+        created_at=datetime.now()
+    )
+    await payment_dao.create(payment_transaction)
+
+    request_dao = RequestDAO(session)
+    status_dao = RequestStatusDAO(session)
+    status_paid = await status_dao.find_one_or_none(RequestStatusBase(name="Оплачено"))
+    if status_paid:
+        await request_dao.update(
+            filters=RequestFilter(id=request_id),
+            values=RequestUpdate(status_id=status_paid.id)
+        )
+        await session.commit()
+        logger.debug(f"Статус заявки {request_id} обновлен на 'Оплачено'")
+
+    await bot.send_message(
+        chat_id=message.chat.id,
+        text=f"Оплата успешно завершена! Заявка #{request_id} оплачена. Номер транзакции: {provider_payment_charge_id}\n"
+    )
+
+    data = kwargs.get("data", {})
+    dialog_manager = data.get("dialog_manager")
+    if dialog_manager:
+        await dialog_manager.show()
+
+
+async def cancel_invoice_handler(callback_query: CallbackQuery):
+    try:
+        await callback_query.message.delete()
+        logger.info(f"Сообщение с инвойсом удалено пользователем {callback_query.from_user.id}")
+    except Exception as e:
+        logger.warning(f"Не удалось удалить сообщение: {e}")
+    await callback_query.answer()

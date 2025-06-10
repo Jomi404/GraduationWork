@@ -192,3 +192,16 @@ class BaseDAO(Generic[T]):
             logger.error(f"Ошибка при массовом обновлении: {e}")
             await self._session.rollback()
             raise
+
+    async def create(self, instance: T) -> T:
+        """Создает новую запись в базе данных."""
+        logger.info(f"Создание записи {self.model.__name__} с параметрами: {vars(instance)}")
+        try:
+            self._session.add(instance)
+            await self._session.flush()
+            logger.info(f"Запись {self.model.__name__} успешно создана с ID {instance.id}")
+            return instance
+        except (SQLAlchemyError, ConnectionDoesNotExistError) as e:
+            logger.error(f"Ошибка при создании записи: {e}")
+            await self._session.rollback()
+            raise

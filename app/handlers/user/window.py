@@ -1,9 +1,13 @@
 import asyncio
-from datetime import datetime, timedelta, date
-from typing import Dict, Any, List, Callable, Optional
 
-from aiogram.types import InlineKeyboardButton, CallbackQuery, InlineKeyboardMarkup
+from datetime import datetime, timedelta, date
+from decimal import Decimal, ROUND_DOWN
+from typing import Dict, Any, List, Callable, Optional, Sequence
+
+from aiogram.types import InlineKeyboardButton, CallbackQuery, InlineKeyboardMarkup, LabeledPrice, PreCheckoutQuery, \
+    SuccessfulPayment
 from aiogram.enums import ContentType
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram_dialog import Window, DialogManager, StartMode
 from aiogram_dialog.api.entities import ChatEvent
 from aiogram_dialog.widgets.kbd import Calendar, CalendarConfig, CalendarScope, CalendarUserConfig, SwitchTo, Back, \
@@ -13,16 +17,21 @@ from aiogram_dialog.widgets.text import Const, Format, Text
 from aiogram_dialog.widgets.media import StaticMedia
 from aiogram_dialog.widgets.widget_event import WidgetEventProcessor
 from aiogram.fsm.state import State, StatesGroup
+from sqlalchemy import Row, RowMapping
 from sqlalchemy.orm import joinedload
 
 from app.core.database import get_session, connection
-from app.handlers.dao import SpecialEquipmentDAO, RequestStatusDAO, RequestDAO, CompanyContactDAO
-from app.handlers.models import Request
+from app.handlers.dao import SpecialEquipmentDAO, RequestStatusDAO, RequestDAO, CompanyContactDAO, \
+    EquipmentRentalHistoryDAO, PaymentTransactionDAO
+from app.handlers.models import Request, Equipment_Rental_History, PaymentTransaction
 from app.handlers.schemas import SpecialEquipmentIdFilterName, RequestStatusBase, RequestBase, RequestUpdate, \
     RequestFilter
-from app.handlers.user.keyboards import paginated_requests_by_equipment, paginated_requests_by_date
+from app.handlers.user.keyboards import paginated_requests_by_equipment, paginated_requests_by_date, \
+    paginated_pending_payment_requests, paginated_paid_invoices, paginated_requests_in_progress, \
+    paginated_requests_completed
 from app.utils.logging import get_logger
 from app.handlers.user.utils import check_equipment_availability, get_active_policy_url
+from app.config import settings
 
 logger = get_logger(__name__)
 
@@ -80,6 +89,15 @@ class MainDialogStates(StatesGroup):
     confirm_delete_all_requests = State()
     more_menu = State()
     contacts = State()
+    pending_payment_requests = State()
+    payment_details = State()
+    payment_confirmation = State()
+    paid_invoices = State()
+    paid_invoice_details = State()
+    my_requests = State()
+    requests_in_progress = State()
+    requests_completed = State()
+    request_details = State()
 
 
 class CustomCalendarDaysView:
@@ -1129,4 +1147,630 @@ def create_contacts_window(state: State) -> Window:
         *widgets,
         state=state,
         getter=contacts_getter_wrapper
+    )
+
+
+async def pending_payment_getter(dialog_manager: DialogManager, **kwargs) -> Dict[str, Any]:
+    logger_my = dialog_manager.middleware_data.get("logger") or logger
+    user = dialog_manager.event.from_user
+    tg_id = user.id
+    items_per_page = 5
+    current_page = dialog_manager.dialog_data.get("pending_payment_page", 0)
+    cache_key = f"cached_pending_requests_{tg_id}"
+
+    force_refresh = dialog_manager.dialog_data.get("force_refresh", False)
+    if force_refresh or cache_key not in dialog_manager.dialog_data:
+        async with get_session() as session:
+            status_dao = RequestStatusDAO(session)
+            status = await status_dao.find_one_or_none(RequestStatusBase(name="Ожидает оплаты"))
+            if not status:
+                logger_my.error("Статус 'Ожидает оплаты' не найден в базе данных")
+                return {"requests": [], "total_pages": 1}
+
+            request_dao = RequestDAO(session)
+            requests = await request_dao.find_all(
+                filters={"tg_id": tg_id, "status_id": status.id},
+                order_by=Request.selected_date.asc()
+            )
+
+            special_equipment_dao = SpecialEquipmentDAO(session)
+            rental_dao = EquipmentRentalHistoryDAO(session)
+            all_requests = []
+            for request in requests:
+                equipment = await special_equipment_dao.find_one_or_none(
+                    SpecialEquipmentIdFilterName(name=request.equipment_name))
+                if not equipment:
+                    logger_my.warning(f"Спецтехника с именем {request.equipment_name} не найдена")
+                    continue
+
+                rental = await rental_dao.find_one_or_none({
+                    "equipment_id": equipment.id,
+                    "start_date": request.selected_date
+                })
+                if rental and rental.end_date:
+                    all_requests.append((
+                        f"{request.equipment_name} (Конец аренды: {rental.end_date.strftime('%d.%m.%Y')})",
+                        str(request.id)
+                    ))
+                else:
+                    logger_my.warning(
+                        f"Не найдена история аренды для equipment_id={equipment.id} или end_date отсутствует")
+
+            dialog_manager.dialog_data[cache_key] = all_requests
+            logger_my.debug(f"Заявки для tg_id={tg_id} закэшированы: {all_requests}")
+
+        if force_refresh:
+            dialog_manager.dialog_data["force_refresh"] = False
+            logger_my.debug("Флаг force_refresh сброшен")
+    else:
+        all_requests = dialog_manager.dialog_data[cache_key]
+        logger_my.debug(f"Используются кэшированные заявки для tg_id={tg_id} (всего: {len(all_requests)})")
+
+    total_requests = len(all_requests)
+    total_pages = (total_requests + items_per_page - 1) // items_per_page
+    dialog_manager.dialog_data["total_pending_payment_pages"] = total_pages
+
+    return {
+        "requests": all_requests,
+        "total_pages": total_pages
+    }
+
+
+def create_pending_payment_window(state: State) -> Window:
+    async def on_pending_payment_click(callback: CallbackQuery, widget, manager: DialogManager, item_id: str) -> None:
+        manager.dialog_data["selected_request_id"] = int(item_id)
+        await manager.switch_to(MainDialogStates.payment_details)
+
+    return Window(
+        StaticMedia(url="https://iimg.su/i/7vTQV5", type=ContentType.PHOTO),
+        Const("Ваши заявки, ожидающие оплаты:"),
+        paginated_pending_payment_requests(on_pending_payment_click),
+        Const("Заявок нет", when=lambda data, widget, manager: not data.get("requests")),
+        SwitchTo(text=Const("Назад ❌"), id="back_to_action_menu", state=MainDialogStates.action_menu),
+        state=state,
+        getter=pending_payment_getter
+    )
+
+
+async def calculate_total_cost(rental: Equipment_Rental_History) -> Decimal:
+    """Рассчитывает общую стоимость аренды на основе rental_price_at_time и total_work_time."""
+    if not rental.rental_price_at_time:
+        logger.error(f"rental_price_at_time is None for rental_id={rental.id}")
+        return Decimal('0.00')
+
+    price_per_hour = rental.rental_price_at_time
+
+    if not rental.total_work_time:
+        logger.warning(f"total_work_time is None for rental_id={rental.id}, assuming 24 hours")
+        total_hours = Decimal('24')
+    else:
+        try:
+            hours, minutes = map(int, rental.total_work_time.split(':'))
+            total_hours = Decimal(str(hours)) + (Decimal(str(minutes)) / Decimal('60'))
+        except ValueError as e:
+            logger.error(f"Invalid total_work_time format '{rental.total_work_time}' for rental_id={rental.id}: {e}")
+            total_hours = Decimal('24')
+
+    total_cost = (price_per_hour * total_hours).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+    logger.debug(f"Calculated total cost for rental_id={rental.id}: {total_cost}")
+    return total_cost
+
+
+async def payment_details_getter(dialog_manager: DialogManager, **kwargs) -> Dict[str, Any]:
+    logger_my = dialog_manager.middleware_data.get("logger") or logger
+    request_id = dialog_manager.dialog_data.get("selected_request_id")
+    # Initialize payment_status dictionary if not present
+    if "payment_status" not in dialog_manager.dialog_data:
+        dialog_manager.dialog_data["payment_status"] = {}
+
+    async with get_session() as session:
+        request_dao = RequestDAO(session)
+        request = await session.get(
+            Request,
+            request_id,
+            options=[joinedload(Request.status)]
+        )
+        if not request:
+            return {"error": "Заявка не найдена"}
+
+        equipment_dao = SpecialEquipmentDAO(session)
+        equipment = await equipment_dao.find_one_or_none(SpecialEquipmentIdFilterName(name=request.equipment_name))
+        if not equipment:
+            logger_my.warning(f"Спецтехника с именем {request.equipment_name} не найдена")
+            return {"error": "Техника не найдена"}
+
+        rental_dao = EquipmentRentalHistoryDAO(session)
+        rental = await rental_dao.find_one_or_none({
+            "equipment_id": equipment.id,
+            "start_date": request.selected_date
+        })
+        if not rental or not rental.end_date:
+            logger_my.warning(f"Не найдена история аренды для equipment_id={equipment.id} или end_date отсутствует")
+            return {"error": "Данные об аренде не найдены"}
+
+        total_cost = await calculate_total_cost(rental)
+        total_cost_kopecks = int(total_cost * Decimal('100'))
+        if total_cost_kopecks <= 0:
+            logger_my.error(f"Invalid total_cost_kopecks={total_cost_kopecks} for request {request_id}")
+            return {"error": "Недопустимая сумма оплаты"}
+
+        logger_my.debug(
+            f"Calculated total cost for request {request_id}: {total_cost} RUB ({total_cost_kopecks} kopeks)")
+
+        # Проверяем наличие транзакции по telegram_id
+        payment_transaction_dao = PaymentTransactionDAO(session)
+        telegram_id = dialog_manager.event.from_user.id
+        transactions = await payment_transaction_dao.find_all(
+            filters={"telegram_id": telegram_id, "request_id": request_id})
+        is_paid = len(transactions) > 0
+
+        return {
+            "equipment_name": request.equipment_name,
+            "selected_date": request.selected_date.strftime("%d.%m.%Y"),
+            "end_date": rental.end_date.strftime("%d.%m.%Y"),
+            "phone_number": request.phone_number,
+            "address": request.address,
+            "first_name": request.first_name,
+            "username": request.username or "Не указан",
+            "status": request.status.name if request.status else "Неизвестно",
+            "total_cost": float(total_cost),
+            "total_cost_kopecks": total_cost_kopecks,
+            "provider_token": settings.provider_token,
+            "currency": settings.currency,
+            "payload": f"request_{request_id}",
+            "is_paid": is_paid
+        }
+
+
+@connection()
+async def on_pay_now_click(callback: CallbackQuery, button: Button, manager: DialogManager, session) -> None:
+    logger_my = manager.middleware_data.get("logger") or logger
+    data = await payment_details_getter(manager)
+    if "error" in data:
+        await callback.message.answer(f"Ошибка: {data['error']}")
+        await callback.answer()
+        return
+
+    request_id = int(data['payload'].replace("request_", ""))
+    payment_transaction_dao = PaymentTransactionDAO(session)
+    existing_transaction = await payment_transaction_dao.find_one_or_none(
+        filters={"request_id": request_id}
+    )
+    if existing_transaction:
+        await callback.message.answer("Счёт для этой заявки уже был оплачен.")
+        await callback.answer()
+        return
+
+    try:
+        if data['total_cost_kopecks'] <= 0:
+            logger_my.error(
+                f"Invalid invoice amount: {data['total_cost_kopecks']} kopeks for request {data['payload']}")
+            await callback.message.answer("Ошибка: сумма счета недопустима.")
+            await callback.answer()
+            return
+
+        existing_message_id = manager.dialog_data.get("invoice_message_id")
+        if existing_message_id:
+            try:
+                await callback.message.bot.delete_message(
+                    chat_id=callback.message.chat.id,
+                    message_id=existing_message_id
+                )
+            except Exception as e:
+                logger_my.warning(f"Не удалось удалить предыдущий счёт: {e}")
+
+        # Создаём кнопку "Отмена"
+        cancel_button = InlineKeyboardBuilder()
+        cancel_button.button(text="Оплатить", pay=True)
+        cancel_button.button(text="Отмена", callback_data="cancel_invoice")
+        keyboard = cancel_button.adjust(1).as_markup()
+
+        invoice_params = {
+            "chat_id": callback.message.chat.id,
+            "title": f"Счёт на аренду {data['equipment_name']}",
+            "description": f"Оплата аренды спецтехники {data['equipment_name']} с {data['selected_date']} по {data['end_date']}",
+            "payload": data['payload'],
+            "provider_token": data['provider_token'],
+            "currency": data['currency'],
+            "prices": [
+                LabeledPrice(label=f"Сумма за аренду {data['equipment_name']}", amount=data['total_cost_kopecks'])
+            ],
+            "start_parameter": f"pay_{data['payload']}",
+            "need_phone_number": True,
+            "need_name": True,
+            "send_phone_number_to_provider": True,
+            "send_email_to_provider": False,
+            "is_flexible": False,
+        }
+        logger_my.debug(f"Отправка счёта с параметрами: {invoice_params}")
+
+        invoice_message = await callback.message.bot.send_invoice(**invoice_params, reply_markup=keyboard)
+        logger_my.debug(f"Инвойс отправлен: message_id={invoice_message.message_id}")
+        manager.dialog_data["invoice_message_id"] = invoice_message.message_id
+        manager.dialog_data["payment_status"][request_id] = {
+            "status": "pending",
+            "pending_since": datetime.now()
+        }
+        await manager.update({})
+        await callback.answer()
+
+    except Exception as e:
+        logger_my.error(f"Ошибка при отправке счета: {str(e)}")
+        await callback.message.bot.send_message(
+            chat_id=callback.message.chat.id,
+            text="Ошибка при создании счета. Попробуйте позже."
+        )
+        await callback.answer()
+
+
+async def payment_details_getter_with_check(dialog_manager: DialogManager, **kwargs) -> Dict[str, Any]:
+    logger_my = dialog_manager.middleware_data.get("logger") or logger
+    request_id = dialog_manager.dialog_data.get("selected_request_id")
+    async with get_session() as session:
+        request_dao = RequestDAO(session)
+        request = await session.get(
+            Request,
+            request_id,
+            options=[joinedload(Request.status)]
+        )
+        if not request:
+            return {"error": "Заявка не найдена"}
+
+        equipment_dao = SpecialEquipmentDAO(session)
+        equipment = await equipment_dao.find_one_or_none(SpecialEquipmentIdFilterName(name=request.equipment_name))
+        if not equipment:
+            logger_my.warning(f"Спецтехника с именем {request.equipment_name} не найдена")
+            return {"error": "Техника не найдена"}
+
+        rental_dao = EquipmentRentalHistoryDAO(session)
+        rental = await rental_dao.find_one_or_none({
+            "equipment_id": equipment.id,
+            "start_date": request.selected_date
+        })
+        if not rental or not rental.end_date:
+            logger_my.warning(f"Не найдена история аренды для equipment_id={equipment.id} или end_date отсутствует")
+            return {"error": "Данные об аренде не найдены"}
+
+        total_cost = await calculate_total_cost(rental)
+        total_cost_kopecks = int(total_cost * Decimal('100'))
+        if total_cost_kopecks <= 0:
+            logger_my.error(f"Invalid total_cost_kopecks={total_cost_kopecks} for request {request_id}")
+            return {"error": "Недопустимая сумма оплаты"}
+
+        logger_my.debug(
+            f"Calculated total cost for request {request_id}: {total_cost} RUB ({total_cost_kopecks} kopeks)")
+
+        # Проверяем статус оплаты через PaymentTransaction или флаг invoice_sent
+        payment_transaction_dao = PaymentTransactionDAO(session)
+        existing_transaction = await payment_transaction_dao.find_one_or_none(
+            filters={"request_id": int(request_id)}
+        )
+        is_paid = bool(existing_transaction) or dialog_manager.dialog_data.get("invoice_sent", False)
+
+        return {
+            "equipment_name": request.equipment_name,
+            "selected_date": request.selected_date.strftime("%d.%m.%Y"),
+            "end_date": rental.end_date.strftime("%d.%m.%Y"),
+            "phone_number": request.phone_number,
+            "address": request.address,
+            "first_name": request.first_name,
+            "username": request.username or "Не указан",
+            "status": request.status.name if request.status else "Неизвестно",
+            "total_cost": float(total_cost),
+            "total_cost_kopecks": total_cost_kopecks,
+            "provider_token": settings.provider_token,
+            "currency": settings.currency,
+            "payload": f"request_{request_id}",
+            "is_paid": is_paid
+        }
+
+
+def create_payment_window(state: State) -> Window:
+    return Window(
+        StaticMedia(url="https://iimg.su/i/7vTQV5", type=ContentType.PHOTO),
+        Const("Детали оплаты заявки:"),
+        Format("Техника: {equipment_name}"),
+        Format("Дата начала: {selected_date}"),
+        Format("Дата окончания: {end_date}"),
+        Format("Телефон: {phone_number}"),
+        Format("Адрес: {address}"),
+        Format("Имя: {first_name}"),
+        Format("Username: @{username}"),
+        Format("Статус: {status}"),
+        Format("Общая стоимость: {total_cost} руб."),
+        Button(
+            Const("Оплатить 💳"),
+            id="pay_now",
+            on_click=on_pay_now_click,
+            when=lambda data, widget, manager: manager.dialog_data.get("payment_status", {}).get(
+                int(data["payload"].replace("request_", "")), None) != "pending"
+        ),
+        SwitchTo(
+            text=Const("Назад ❌"),
+            id="back_to_pending",
+            state=MainDialogStates.pending_payment_requests
+        ),
+        state=state,
+        getter=payment_details_getter
+    )
+
+
+async def check_payment_status(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
+    request_id = manager.dialog_data.get("selected_request_id")
+    async with get_session() as session:
+        request_dao = RequestDAO(session)
+        request = await session.get(Request, request_id, options=[joinedload(Request.status)])
+        if request and request.status.name == "Оплачено":
+            manager.dialog_data["payment_status"][request_id] = "paid"
+            await callback.message.answer("Оплата успешно завершена! ✅")
+        else:
+            await callback.message.answer("Оплата ещё не завершена. Пожалуйста, попробуйте позже.")
+    await manager.update({})
+
+
+async def on_pending_payment_click(callback: CallbackQuery, widget, manager: DialogManager, item_id: str) -> None:
+    current_request_id = int(item_id)
+    payment_status = manager.dialog_data.get("payment_status", {})
+    for req_id in list(payment_status.keys()):
+        if req_id != current_request_id and payment_status.get(req_id) == "pending":
+            async with get_session() as session:
+                request_dao = RequestDAO(session)
+                request = await session.get(Request, req_id, options=[joinedload(Request.status)])
+                if request and request.status.name != "Оплачено":
+                    payment_status[req_id] = None
+                    logger.debug(f"Статус оплаты для request_id={req_id} сброшен на None")
+    manager.dialog_data["payment_status"] = payment_status
+    manager.dialog_data["selected_request_id"] = current_request_id
+    await manager.switch_to(MainDialogStates.payment_details)
+
+
+async def get_user_payment_transactions(telegram_id: int, session) -> Sequence[Row[Any] | RowMapping | Any]:
+    """Получение всех транзакций оплаты для пользователя по telegram_id."""
+    payment_dao = PaymentTransactionDAO(session)
+    return await payment_dao.find_all(filters={"telegram_id": telegram_id})
+
+
+async def paid_invoices_getter(dialog_manager: DialogManager, **kwargs) -> Dict[str, Any]:
+    logger_my = dialog_manager.middleware_data.get("logger") or logger
+    user = dialog_manager.event.from_user
+    tg_id = user.id
+    items_per_page = 5
+    current_page = dialog_manager.dialog_data.get("paid_invoices_page", 0)
+    cache_key = f"cached_paid_invoices_{tg_id}"
+
+    force_refresh = dialog_manager.dialog_data.get("force_refresh", False)
+    if force_refresh or cache_key not in dialog_manager.dialog_data:
+        async with get_session() as session:
+            payment_dao = PaymentTransactionDAO(session)
+            transactions = await payment_dao.find_all(
+                filters={"telegram_id": tg_id, "status": "success"},
+                order_by=PaymentTransaction.created_at.desc()
+            )
+            all_transactions = [
+                (transaction.created_at.strftime("%d.%m.%Y %H:%M"), str(transaction.id))
+                for transaction in transactions
+            ]
+            dialog_manager.dialog_data[cache_key] = all_transactions
+            logger_my.debug(f"Транзакции для tg_id={tg_id} закэшированы: {len(all_transactions)} записей")
+
+        if force_refresh:
+            dialog_manager.dialog_data["force_refresh"] = False
+            logger_my.debug("Флаг force_refresh сброшен")
+    else:
+        all_transactions = dialog_manager.dialog_data[cache_key]
+        logger_my.debug(f"Используются кэшированные транзакции для tg_id={tg_id} (всего: {len(all_transactions)})")
+
+    total_transactions = len(all_transactions)
+    total_pages = (total_transactions + items_per_page - 1) // items_per_page
+    dialog_manager.dialog_data["total_paid_invoices_pages"] = total_pages
+
+    return {
+        "transactions": all_transactions,
+        "total_pages": total_pages
+    }
+
+
+def create_paid_invoices_window(state: State) -> Window:
+    async def on_transaction_click(callback: CallbackQuery, widget, manager: DialogManager, item_id: str) -> None:
+        manager.dialog_data["selected_transaction_id"] = int(item_id)
+        await manager.switch_to(MainDialogStates.paid_invoice_details)
+
+    return Window(
+        StaticMedia(url="https://iimg.su/i/7vTQV5", type=ContentType.PHOTO),
+        Const("Ваши оплаченные счета:"),
+        paginated_paid_invoices(on_transaction_click),
+        Const("Счетов нет", when=lambda data, widget, manager: not data.get("transactions")),
+        SwitchTo(text=Const("Назад ❌"), id="back_to_action_menu", state=MainDialogStates.action_menu),
+        state=state,
+        getter=paid_invoices_getter
+    )
+
+
+async def paid_invoice_details_getter(dialog_manager: DialogManager, **kwargs) -> Dict[str, Any]:
+    transaction_id = dialog_manager.dialog_data.get("selected_transaction_id")
+    async with get_session() as session:
+        payment_dao = PaymentTransactionDAO(session)
+        transaction = await payment_dao.find_one_or_none({"id": transaction_id})
+        if not transaction:
+            return {"error": "Транзакция не найдена"}
+        return {
+            "transaction_id": transaction.transaction_id,
+            "amount": float(transaction.amount),
+            "status": "Оплачено" if transaction.status == "success" else transaction.status,
+            "created_at": transaction.created_at.strftime("%d.%m.%Y %H:%M"),
+        }
+
+
+def create_paid_invoice_details_window(state: State) -> Window:
+    return Window(
+        StaticMedia(url="https://iimg.su/i/7vTQV5", type=ContentType.PHOTO),
+        Const("Детали оплаченного счета:"),
+        Format("ID транзакции: {transaction_id}"),
+        Format("Сумма: {amount} руб."),
+        Format("Статус: {status}"),
+        Format("Дата оплаты: {created_at}"),
+        SwitchTo(text=Const("Назад ❌"), id="back_to_paid_invoices", state=MainDialogStates.paid_invoices),
+        state=state,
+        getter=paid_invoice_details_getter
+    )
+
+
+def create_my_requests_window(state: State) -> Window:
+    return Window(
+        StaticMedia(url="https://iimg.su/i/7vTQV5", type=ContentType.PHOTO),
+        Const("Мои заявки:"),
+        SwitchTo(text=Const("В работе"), id="in_progress", state=MainDialogStates.requests_in_progress),
+        SwitchTo(text=Const("Завершенные"), id="completed", state=MainDialogStates.requests_completed),
+        SwitchTo(text=Const("Назад ❌"), id="back_to_menu", state=MainDialogStates.action_menu),
+        state=state,
+    )
+
+
+async def requests_in_progress_getter(dialog_manager: DialogManager, **kwargs) -> Dict[str, Any]:
+    return await get_requests_by_status(dialog_manager, "В работе")
+
+
+async def requests_completed_getter(dialog_manager: DialogManager, **kwargs) -> Dict[str, Any]:
+    return await get_requests_by_status(dialog_manager, "Завершена")
+
+
+async def get_requests_by_status(dialog_manager: DialogManager, status_name: str) -> Dict[str, Any]:
+    logger_my = dialog_manager.middleware_data.get("logger") or logger
+    user = dialog_manager.event.from_user
+    tg_id = user.id
+    items_per_page = 5
+    current_page = dialog_manager.dialog_data.get(f"{status_name}_page", 0)
+    cache_key = f"cached_requests_{status_name}_{tg_id}"
+
+    force_refresh = dialog_manager.dialog_data.get("force_refresh", False)
+    if force_refresh or cache_key not in dialog_manager.dialog_data:
+        async with get_session() as session:
+            status_dao = RequestStatusDAO(session)
+            status = await status_dao.find_one_or_none(RequestStatusBase(name=status_name))
+            if not status:
+                logger_my.error(f"Статус '{status_name}' не найден в базе данных")
+                return {"requests": [], "total_pages": 1}
+
+            request_dao = RequestDAO(session)
+            requests = await request_dao.find_all(
+                filters={"tg_id": tg_id, "status_id": status.id},
+                order_by=Request.selected_date.desc()
+            )
+            all_requests = [
+                (request.equipment_name, str(request.id))
+                for request in requests
+            ]
+            dialog_manager.dialog_data[cache_key] = all_requests
+            logger_my.debug(
+                f"Заявки со статусом '{status_name}' для tg_id={tg_id} закэшированы: {len(all_requests)} записей")
+
+        if force_refresh:
+            dialog_manager.dialog_data["force_refresh"] = False
+            logger_my.debug("Флаг force_refresh сброшен")
+    else:
+        all_requests = dialog_manager.dialog_data[cache_key]
+        logger_my.debug(
+            f"Используются кэшированные заявки со статусом '{status_name}' для tg_id={tg_id} (всего: {len(all_requests)})")
+
+    total_requests = len(all_requests)
+    total_pages = (total_requests + items_per_page - 1) // items_per_page
+    dialog_manager.dialog_data[f"total_{status_name}_pages"] = total_pages
+
+    return {
+        "requests": all_requests,
+        "total_pages": total_pages
+    }
+
+
+def create_requests_in_progress_window(state: State) -> Window:
+    async def on_request_click(callback: CallbackQuery, widget, manager: DialogManager, item_id: str) -> None:
+        manager.dialog_data["selected_request_id"] = int(item_id)
+        await manager.switch_to(MainDialogStates.request_details)
+
+    return Window(
+        StaticMedia(url="https://iimg.su/i/7vTQV5", type=ContentType.PHOTO),
+        Const("Заявки в работе:"),
+        paginated_requests_in_progress(on_request_click),
+        Const("Заявок нет", when=lambda data, widget, manager: not data.get("requests")),
+        SwitchTo(text=Const("Назад ❌"), id="back_to_my_requests", state=MainDialogStates.my_requests),
+        state=state,
+        getter=requests_in_progress_getter
+    )
+
+
+def create_requests_completed_window(state: State) -> Window:
+    async def on_request_click(callback: CallbackQuery, widget, manager: DialogManager, item_id: str) -> None:
+        manager.dialog_data["selected_request_id"] = int(item_id)
+        await manager.switch_to(MainDialogStates.request_details)
+
+    return Window(
+        StaticMedia(url="https://iimg.su/i/7vTQV5", type=ContentType.PHOTO),
+        Const("Завершенные заявки:"),
+        paginated_requests_completed(on_request_click),
+        Const("Заявок нет", when=lambda data, widget, manager: not data.get("requests")),
+        SwitchTo(text=Const("Назад ❌"), id="back_to_my_requests", state=MainDialogStates.my_requests),
+        state=state,
+        getter=requests_completed_getter
+    )
+
+
+async def request_details_getter(dialog_manager: DialogManager, **kwargs) -> Dict[str, Any]:
+    request_id = dialog_manager.dialog_data.get("selected_request_id")
+    if not request_id:
+        return {"error": "ID заявки не указан"}
+
+    async with get_session() as session:
+        request_dao = RequestDAO(session)
+        request = await session.get(
+            Request,
+            request_id,
+            options=[joinedload(Request.status)]
+        )
+        if not request:
+            return {"error": "Заявка не найдена"}
+
+        status_name = request.status.name if request.status else "Неизвестно"
+        return {
+            "equipment_name": request.equipment_name,
+            "selected_date": request.selected_date.strftime("%d.%m.%Y"),
+            "status": status_name,
+            "phone_number": request.phone_number,
+            "address": request.address,
+            "first_name": request.first_name,
+            "username": request.username or "Не указан",
+        }
+
+
+async def get_status_name(status_id: int, session) -> str:
+    status_dao = RequestStatusDAO(session)
+    status = await status_dao.find_one_or_none({"id": status_id})
+    return status.name if status else "Неизвестно"
+
+
+def create_request_details_window(state: State) -> Window:
+    return Window(
+        StaticMedia(url="https://iimg.su/i/7vTQV5", type=ContentType.PHOTO),
+        Const("Детали заявки:"),
+        Format("{error}", when="error"),
+        Format("Техника: {equipment_name}", when=lambda data, widget, manager: not data.get("error")),
+        Format("Дата: {selected_date}", when=lambda data, widget, manager: not data.get("error")),
+        Format("Статус: {status}", when=lambda data, widget, manager: not data.get("error")),
+        Format("Телефон: {phone_number}", when=lambda data, widget, manager: not data.get("error")),
+        Format("Адрес: {address}", when=lambda data, widget, manager: not data.get("error")),
+        Format("Имя: {first_name}", when=lambda data, widget, manager: not data.get("error")),
+        Format("Username: @{username}", when=lambda data, widget, manager: not data.get("error")),
+        SwitchTo(
+            text=Const("Назад ❌"),
+            id="back_to_in_progress",
+            state=MainDialogStates.requests_in_progress,
+            when=lambda data, widget, manager: data.get("status") == "В работе" and not data.get("error")
+        ),
+        SwitchTo(
+            text=Const("Назад ❌"),
+            id="back_to_completed",
+            state=MainDialogStates.requests_completed,
+            when=lambda data, widget, manager: data.get("status") == "Завершена" and not data.get("error")
+        ),
+        state=state,
+        getter=request_details_getter
     )

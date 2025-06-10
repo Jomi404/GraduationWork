@@ -1,6 +1,6 @@
 from app.core.base_dao import BaseDAO
 from app.handlers.models import Privacy_Policy, Special_Equipment_Category, Special_Equipment, \
-    Equipment_Rental_History, Request_Status, Request, CompanyContact
+    Equipment_Rental_History, Request_Status, Request, CompanyContact, PaymentTransaction
 from app.handlers.schemas import RequestStatusBase, RequestCreate, SpecialEquipmentIdFilterName, CompanyContactFilter
 from app.utils import get_logger
 
@@ -119,3 +119,8 @@ class CompanyContactDAO(BaseDAO[CompanyContact]):
         """Получить активную контактную информацию."""
         filters = CompanyContactFilter(is_active=True)
         return await self.find_one_or_none(filters)
+
+
+class PaymentTransactionDAO(BaseDAO[PaymentTransaction]):
+    """Объект доступа к данным (DAO) для управления записями PaymentTransaction."""
+    model = PaymentTransaction

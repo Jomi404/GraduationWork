@@ -273,3 +273,14 @@ class CompanyContactFilter(BaseModel):
     """Схема для фильтрации контактной информации."""
     is_active: Optional[bool] = True
     model_config = ConfigDict(from_attributes=True)
+
+
+class PaymentTransactionCreate(BaseModel):
+    """Схема для создания новой транзакции оплаты."""
+    request_id: int
+    telegram_id: int  # Новое поле
+    transaction_id: str
+    amount: Decimal
+    status: str
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)

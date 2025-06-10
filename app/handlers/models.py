@@ -1,4 +1,6 @@
 from datetime import datetime
+from decimal import Decimal
+
 from sqlalchemy import String, Text, Integer, ForeignKey, Numeric, Index, TIMESTAMP, DECIMAL, Boolean, BigInteger
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -169,6 +171,8 @@ class Request(Base):
     )
 
     status: Mapped["Request_Status"] = relationship("Request_Status")
+    payment_transactions: Mapped[list["PaymentTransaction"]] = relationship(
+        back_populates="request", cascade="all, delete")
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__}(id={self.id}, tg_id={self.tg_id}, status_id={self.status_id})>"
@@ -222,3 +226,31 @@ class CompanyContact(Base):
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__}(id={self.id}, company_name={self.company_name})>"
+
+
+class PaymentTransaction(Base):
+    """Модель для хранения информации о транзакциях оплаты.
+    Поля:
+        id: int - Уникальный идентификатор транзакции.
+        request_id: int - Внешний ключ, ссылающийся на заявку.
+        transaction_id: str - Уникальный идентификатор транзакции в Юкасса.
+        amount: Decimal - Сумма оплаты.
+        status: str - Статус транзакции (например, 'pending', 'success', 'failed').
+        created_at: datetime - Временная метка создания транзакции.
+    """
+    __tablename__ = "payment_transactions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    request_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("requests.id", ondelete="CASCADE"), nullable=False
+    )
+    telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    transaction_id: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
+
+    request: Mapped["Request"] = relationship("Request", back_populates="payment_transactions")
+
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__}(id={self.id}, request_id={self.request_id}, status={self.status})>"

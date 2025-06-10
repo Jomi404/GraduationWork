@@ -128,7 +128,8 @@ def paginated_requests_by_date(on_click):
 
 
 def paginated_requests_by_equipment(on_click):
-    async def update_request_equipment_page(event: CallbackQuery, scroll: "ManagedScroll", manager: DialogManager) -> None:
+    async def update_request_equipment_page(event: CallbackQuery, scroll: "ManagedScroll",
+                                            manager: DialogManager) -> None:
         try:
             callback_data = event.data
             if "request_equipment_ids:" in callback_data:
@@ -160,4 +161,119 @@ def paginated_requests_by_equipment(on_click):
         hide_on_single_page=True,
         hide_pager=False,
         on_page_changed=update_request_equipment_page,
+    )
+
+
+def paginated_pending_payment_requests(on_click):
+    async def update_pending_payment_page(event: CallbackQuery, scroll: "ManagedScroll",
+                                          manager: DialogManager) -> None:
+        try:
+            callback_data = event.data
+            if "pending_payment_ids:" in callback_data:
+                page_str = callback_data.split("pending_payment_ids:")[1]
+                page = int(page_str)
+                total_pages = manager.dialog_data.get("total_pending_payment_pages", 1)
+                logger.debug(f"Получено total_pages для заявок на оплату: {total_pages}")
+                if 0 <= page < total_pages:
+                    manager.dialog_data["pending_payment_page"] = page
+                    logger.debug(f"Обновлена страница заявок на оплату: {page}")
+                else:
+                    logger.warning(f"Попытка установить недопустимую страницу: {page}, всего страниц: {total_pages}")
+            else:
+                logger.error(f"Неверный формат callback_data: {callback_data}")
+        except (ValueError, TypeError, IndexError) as e:
+            logger.error(f"Ошибка при обновлении страницы заявок на оплату: {str(e)}")
+
+    return ScrollingGroup(
+        Select(
+            Format("{item[0]}"),
+            id="s_scroll_pending_payment",
+            item_id_getter=itemgetter(1),
+            items="requests",
+            on_click=on_click,
+        ),
+        id="pending_payment_ids",
+        width=1,
+        height=SCROLLING_HEIGHT,
+        hide_on_single_page=True,
+        hide_pager=False,
+        on_page_changed=update_pending_payment_page,
+    )
+
+
+def paginated_paid_invoices(on_click):
+    async def update_paid_invoices_page(event: CallbackQuery, scroll: "ManagedScroll", manager: DialogManager) -> None:
+        try:
+            callback_data = event.data
+            if "paid_invoices_ids:" in callback_data:
+                page_str = callback_data.split("paid_invoices_ids:")[1]
+                page = int(page_str)
+                total_pages = manager.dialog_data.get("total_paid_invoices_pages", 1)
+                if 0 <= page < total_pages:
+                    manager.dialog_data["paid_invoices_page"] = page
+                    logger.debug(f"Обновлена страница оплаченных счетов: {page}")
+                else:
+                    logger.warning(f"Попытка установить недопустимую страницу: {page}, всего страниц: {total_pages}")
+            else:
+                logger.error(f"Неверный формат callback_data: {callback_data}")
+        except (ValueError, TypeError, IndexError) as e:
+            logger.error(f"Ошибка при обновлении страницы оплаченных счетов: {str(e)}")
+
+    return ScrollingGroup(
+        Select(
+            Format("{item[0]}"),
+            id="s_scroll_paid_invoices",
+            item_id_getter=itemgetter(1),
+            items="transactions",
+            on_click=on_click,
+        ),
+        id="paid_invoices_ids",
+        width=1,
+        height=SCROLLING_HEIGHT,
+        hide_on_single_page=True,
+        hide_pager=False,
+        on_page_changed=update_paid_invoices_page,
+    )
+
+
+def paginated_requests_in_progress(on_click):
+    return paginated_requests_by_status("in_progress", on_click)
+
+
+def paginated_requests_completed(on_click):
+    return paginated_requests_by_status("completed", on_click)
+
+
+def paginated_requests_by_status(status_key: str, on_click):
+    async def update_page(event: CallbackQuery, scroll: "ManagedScroll", manager: DialogManager) -> None:
+        try:
+            callback_data = event.data
+            if f"{status_key}_ids:" in callback_data:
+                page_str = callback_data.split(f"{status_key}_ids:")[1]
+                page = int(page_str)
+                total_pages = manager.dialog_data.get(f"total_{status_key}_pages", 1)
+                if 0 <= page < total_pages:
+                    manager.dialog_data[f"{status_key}_page"] = page
+                    logger.debug(f"Обновлена страница заявок '{status_key}': {page}")
+                else:
+                    logger.warning(f"Попытка установить недопустимую страницу: {page}, всего страниц: {total_pages}")
+            else:
+                logger.error(f"Неверный формат callback_data: {callback_data}")
+        except (ValueError, TypeError, IndexError) as e:
+            logger.error(f"Ошибка при обновлении страницы заявок '{status_key}': {str(e)}")
+
+    return ScrollingGroup(
+        Select(
+            Format("{item[0]}"),
+            id=f"s_scroll_{status_key}",
+            item_id_getter=itemgetter(1),
+            items="requests",
+            on_click=on_click,
+        ),
+        id=f"{status_key}_ids",
+        width=1,
+        height=SCROLLING_HEIGHT,
+        hide_on_single_page=True,
+        hide_pager=False,
+        on_page_changed=update_page,
     )

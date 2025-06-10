@@ -122,25 +122,19 @@ class AdminHandler(BaseHandler):
             self.on_non_admin_access)
 
     async def set_logger_middleware(self, handler, event, data: dict):
-        # Добавляем маркер, чтобы подтвердить, что используется обновлённая версия кода
-        self.logger.info("Используется обновлённая версия set_logger_middleware v2.2")
+        self.logger.info("Используется обновлённая версия set_logger_middleware v2.3")
         try:
             data["logger"] = self.logger
             return await handler(event, data)
         except UnknownIntent as e:
-            # Извлекаем intent_id из сообщения об ошибке
             error_message = str(e)
             intent_id = error_message.split("intent id: ")[-1] if "intent id: " in error_message else "unknown"
-            # Извлекаем пользователя из события
             user = get_user_from_update(event)
             user_id = user.id if user else "unknown"
-            # Добавляем отладку для проверки типа события
             self.logger.debug(f"Тип события: {type(event)}, содержимое: {event}")
-            # Обработка устаревшего контекста
             self.logger.warning(
                 f"Устаревший контекст для intent_id={intent_id}, пользователь={user_id}. Сбрасываем диалог.")
 
-            # Извлекаем сообщение для редактирования или удаления
             message = None
             if isinstance(event, Update) and event.callback_query:
                 self.logger.debug(f"Событие является Update с CallbackQuery, извлекаем сообщение")
@@ -151,11 +145,9 @@ class AdminHandler(BaseHandler):
             else:
                 self.logger.debug(f"Событие не является CallbackQuery, редактирование сообщения невозможно")
 
-            # Проверяем наличие dialog_manager для сброса диалога
             dialog_manager = data.get("dialog_manager")
             self.logger.debug(f"dialog_manager: {dialog_manager}")
 
-            # Удаляем сообщение, если оно доступно
             if message:
                 self.logger.debug(f"Сообщение найдено: message_id={message.message_id}, chat_id={message.chat.id}")
                 try:
@@ -165,86 +157,44 @@ class AdminHandler(BaseHandler):
                 except Exception as delete_error:
                     self.logger.warning(f"Не удалось удалить сообщение: {str(delete_error)}")
 
-            # Редактируем сообщение или уведомляем пользователя
-            if message:
+            if dialog_manager:
                 try:
-                    if dialog_manager:
-                        # Если dialog_manager доступен, сбрасываем диалог
-                        try:
-                            await dialog_manager.reset_stack()
-                            dialog_manager.dialog_data.clear()
-                            await dialog_manager.start(state=MainDialogStates.action_menu, mode=StartMode.RESET_STACK)
-                            await message.edit_text("Диалог устарел. Начинаем заново! 🚀")
-                            if isinstance(event, Update) and event.callback_query:
-                                await event.callback_query.answer()
-                            elif isinstance(event, CallbackQuery):
-                                await event.answer()
-                        except Exception as reset_error:
-                            self.logger.error(f"Ошибка при сбросе диалога: {str(reset_error)}", exc_info=True)
-                            await message.edit_text("Произошла ошибка. Пожалуйста, начните заново с команды /start.")
-                            if isinstance(event, Update) and event.callback_query:
-                                await event.callback_query.answer()
-                            elif isinstance(event, CallbackQuery):
-                                await event.answer()
+                    await dialog_manager.reset_stack()
+                    dialog_manager.dialog_data.clear()
+                    # Проверяем, является ли текущий диалог административным
+                    if dialog_manager.current_context() and dialog_manager.current_context().state in [
+                        AdminDialogStates.main,
+                        AdminDialogStates.admin_menu
+                    ]:
+                        await dialog_manager.start(state=AdminDialogStates.main, mode=StartMode.RESET_STACK)
+                        if message:
+                            await message.answer("Диалог устарел. Возвращаемся в админ-панель! 🚀")
                     else:
-                        # Если dialog_manager отсутствует, просто уведомляем пользователя
-                        self.logger.warning("dialog_manager отсутствует, сброс диалога невозможен")
-                        await message.edit_text("Диалог устарел. Пожалуйста, начните заново с команды /start.")
-                        if isinstance(event, Update) and event.callback_query:
-                            await event.callback_query.answer()
-                        elif isinstance(event, CallbackQuery):
-                            await event.answer()
-                except Exception as edit_error:
-                    self.logger.warning(f"Не удалось отредактировать сообщение: {str(edit_error)}")
-                    # Если редактирование не удалось, отправляем новое сообщение
-                    try:
-                        if dialog_manager:
-                            await dialog_manager.reset_stack()
-                            dialog_manager.dialog_data.clear()
-                            await dialog_manager.start(state=MainDialogStates.action_menu, mode=StartMode.RESET_STACK)
+                        await dialog_manager.start(state=MainDialogStates.action_menu, mode=StartMode.RESET_STACK)
+                        if message:
                             await message.answer("Диалог устарел. Начинаем заново! 🚀")
-                        else:
-                            self.logger.warning("dialog_manager отсутствует, сброс диалога невозможен")
-                            await message.answer("Диалог устарел. Пожалуйста, начните заново с команды /start.")
-                        if isinstance(event, Update) and event.callback_query:
-                            await event.callback_query.answer()
-                        elif isinstance(event, CallbackQuery):
-                            await event.answer()
-                    except Exception as answer_error:
-                        self.logger.error(f"Не удалось отправить новое сообщение: {str(answer_error)}")
-            else:
-                # Если сообщение недоступно, отправляем новое сообщение
-                self.logger.warning("Сообщение для редактирования недоступно, отправляем новое уведомление")
-                try:
                     if isinstance(event, Update) and event.callback_query:
-                        if dialog_manager:
-                            await dialog_manager.reset_stack()
-                            dialog_manager.dialog_data.clear()
-                            await dialog_manager.start(state=MainDialogStates.action_menu, mode=StartMode.RESET_STACK)
-                            await event.callback_query.message.answer("Диалог устарел. Начинаем заново! 🚀")
-                        else:
-                            self.logger.warning("dialog_manager отсутствует, сброс диалога невозможен")
-                            await event.callback_query.message.answer(
-                                "Диалог устарел. Пожалуйста, начните заново с команды /start.")
                         await event.callback_query.answer()
                     elif isinstance(event, CallbackQuery):
-                        if dialog_manager:
-                            await dialog_manager.reset_stack()
-                            dialog_manager.dialog_data.clear()
-                            await dialog_manager.start(state=MainDialogStates.action_menu, mode=StartMode.RESET_STACK)
-                            await event.message.answer("Диалог устарел. Начинаем заново! 🚀")
-                        else:
-                            self.logger.warning("dialog_manager отсутствует, сброс диалога невозможен")
-                            await event.message.answer("Диалог устарел. Пожалуйста, начните заново с команды /start.")
                         await event.answer()
-                    elif isinstance(event, Update) and event.message:
-                        await event.message.answer("Диалог устарел. Пожалуйста, начните заново с команды /start.")
-                    elif isinstance(event, Message):
-                        await event.answer("Диалог устарел. Пожалуйста, начните заново с команды /start.")
-                except Exception as answer_error:
-                    self.logger.error(f"Не удалось отправить новое сообщение: {str(answer_error)}")
+                except Exception as reset_error:
+                    self.logger.error(f"Ошибка при сбросе диалога: {str(reset_error)}", exc_info=True)
+                    if message:
+                        await message.answer("Произошла ошибка. Пожалуйста, начните заново с команды /start.")
+                    if isinstance(event, Update) and event.callback_query:
+                        await event.callback_query.answer()
+                    elif isinstance(event, CallbackQuery):
+                        await event.answer()
+            else:
+                self.logger.warning("dialog_manager отсутствует, сброс диалога невозможен")
+                if message:
+                    await message.answer("Диалог устарел. Пожалуйста, начните заново с команды /start.")
+                if isinstance(event, Update) and event.callback_query:
+                    await event.callback_query.answer()
+                elif isinstance(event, CallbackQuery):
+                    await event.answer()
 
-            return None  # Прерываем обработку, так как контекст устарел
+            return None
         except Exception as e:
             self.logger.error(f"Ошибка в middleware: {str(e)}", exc_info=True)
             raise
