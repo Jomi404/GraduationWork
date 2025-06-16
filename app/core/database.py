@@ -16,14 +16,18 @@ from app.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+# Создание асинхронного движка с улучшенной конфигурацией пула
 engine = create_async_engine(
     url=database_url,
-    pool_size=10,
-    max_overflow=20,
-    pool_timeout=30,
-    pool_recycle=1800,
+    pool_size=10,           # Максимальное количество соединений в пуле
+    max_overflow=20,        # Дополнительные соединения при переполнении
+    pool_timeout=30,        # Таймаут ожидания соединения
+    pool_recycle=300,       # Обновление соединений каждые 5 минут
+    pool_pre_ping=True      # Проверка соединений перед использованием
 )
+
 async_session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
 str_uniq = Annotated[str, mapped_column(unique=True, nullable=False)]
 
 

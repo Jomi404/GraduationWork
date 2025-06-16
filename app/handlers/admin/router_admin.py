@@ -3,7 +3,7 @@ from aiogram.filters import Command
 from aiogram.fsm.state import State, StatesGroup
 from aiogram_dialog import Dialog, DialogManager, Window, StartMode
 from aiogram_dialog.widgets.text import Const
-from aiogram_dialog.widgets.kbd import Button, Url
+from aiogram_dialog.widgets.kbd import Button, Url, WebApp
 from aiogram_dialog.api.exceptions import UnknownIntent
 from app.handlers import BaseHandler
 from app.handlers.admin.utils import AdminFilter
@@ -18,7 +18,6 @@ class AdminDialogStates(StatesGroup):
     admin_menu = State()
 
 
-# Функция для извлечения пользователя из объекта Update
 def get_user_from_update(event: Update):
     if isinstance(event, Update):
         if event.callback_query:
@@ -37,20 +36,6 @@ async def on_admin_panel_click(callback: CallbackQuery, button: Button, dialog_m
     user_id = dialog_manager.event.from_user.id
     logger_my.info(f"Администратор {user_id} нажал 'Панель администратора'")
     await dialog_manager.switch_to(AdminDialogStates.admin_menu)
-
-
-async def on_view_stats_click(callback: CallbackQuery, button: Button, dialog_manager: DialogManager) -> None:
-    logger_my = dialog_manager.middleware_data.get("logger") or logger
-    user_id = callback.from_user.id
-    logger_my.info(f"Администратор {user_id} запросил статистику")
-    await callback.message.answer("Статистика: 100 пользователей, 50 активных.")
-
-
-async def on_manage_users_click(callback: CallbackQuery, button: Button, dialog_manager: DialogManager) -> None:
-    logger_my = dialog_manager.middleware_data.get("logger") or logger
-    user_id = callback.from_user.id
-    logger_my.info(f"Администратор {user_id} запросил управление пользователями")
-    await callback.message.answer("Управление пользователями: [в разработке].")
 
 
 async def on_back_click(callback: CallbackQuery, button: Button, dialog_manager: DialogManager) -> None:
@@ -80,21 +65,9 @@ def admin_dialog() -> Dialog:
             state=AdminDialogStates.main,
         ),
         Window(
+
             Const("Выберите действие в админ-панели:"),
-            Url(
-                text=Const("Перейти в панель администратора"),
-                url=Const("https://admin-panel-78o9.onrender.com")
-            ),
-            Button(
-                text=Const("Посмотреть статистику"),
-                id="view_stats",
-                on_click=on_view_stats_click
-            ),
-            Button(
-                text=Const("Управление пользователями"),
-                id="manage_users",
-                on_click=on_manage_users_click
-            ),
+            WebApp(text=Const("Перейти в панель администратора:"), url=Const('https://lynxwheelsspec.ru/')),
             Button(
                 text=Const("Назад"),
                 id="back",
@@ -161,7 +134,6 @@ class AdminHandler(BaseHandler):
                 try:
                     await dialog_manager.reset_stack()
                     dialog_manager.dialog_data.clear()
-                    # Проверяем, является ли текущий диалог административным
                     if dialog_manager.current_context() and dialog_manager.current_context().state in [
                         AdminDialogStates.main,
                         AdminDialogStates.admin_menu

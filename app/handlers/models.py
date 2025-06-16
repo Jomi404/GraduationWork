@@ -125,7 +125,7 @@ class Equipment_Rental_History(Base):
     start_date: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False)
     end_date: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=True)
     rental_price_at_time: Mapped[DECIMAL] = mapped_column(Numeric(10, 2), nullable=False)
-    total_work_time: Mapped[str] = mapped_column(String(5), nullable=True)
+    total_work_time: Mapped[str] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
 
     equipment: Mapped["Special_Equipment"] = relationship(back_populates="rental_history")
@@ -254,3 +254,35 @@ class PaymentTransaction(Base):
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__}(id={self.id}, request_id={self.request_id}, status={self.status})>"
+
+
+class UserStatus(Base):
+    """Модель для хранения статусов пользователей."""
+    __tablename__ = "user_statuses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
+
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__}(id={self.id}, status={self.status})>"
+
+
+class User(Base):
+    """Модель для хранения данных о пользователях."""
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
+    username: Mapped[str] = mapped_column(String(50), nullable=True)
+    status_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("user_statuses.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP, server_default=func.now(), onupdate=func.now()
+    )
+
+    status: Mapped["UserStatus"] = relationship("UserStatus")
+
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__}(id={self.id}, telegram_id={self.telegram_id}, status_id={self.status_id})>"
