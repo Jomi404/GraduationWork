@@ -7,7 +7,6 @@ def setup_logging():
     """Настройка цветного логирования для консоли и записи в файл."""
     logger = colorlog.getLogger()
     if not logger.handlers:
-        # Настройка консольного обработчика с цветами
         console_handler = colorlog.StreamHandler()
         console_formatter = colorlog.ColoredFormatter(
             "%(asctime)s - %(name)s - %(log_color)s%(levelname)s%(reset)s - %(message)s",
@@ -26,7 +25,6 @@ def setup_logging():
         log_dir = base_dir / 'data' / 'log'
         log_path = log_dir / 'bot.log'
 
-        # Настройка файлового обработчика (без цветов)
         file_handler = logging.FileHandler(log_path)
         file_formatter = logging.Formatter(
             "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -34,10 +32,9 @@ def setup_logging():
         )
         file_handler.setFormatter(file_formatter)
 
-        # Добавление обработчиков к логгеру
         logger.addHandler(console_handler)
         logger.addHandler(file_handler)
-        logger.setLevel(logging.DEBUG)
+        logger.setLevel(logging.INFO)
 
 
 def get_logger(name: str) -> logging.Logger:

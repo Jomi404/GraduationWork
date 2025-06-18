@@ -1,7 +1,5 @@
-import asyncio
 from datetime import datetime
 from decimal import Decimal
-
 from aiogram import Router
 from aiogram import F
 from aiogram.enums import ContentType
@@ -16,6 +14,7 @@ from aiogram_dialog.widgets.text import Const, Format
 from aiogram_dialog.api.exceptions import NoContextError, UnknownIntent
 from pydantic import ValidationError
 
+from app.config import settings
 from app.handlers.models import PaymentTransaction
 from app.handlers.user.window import create_confirmation_window, create_rental_calendar_window, enter_phone_getter, \
     create_request_getter, enter_address_getter, create_calendar_view_window, MainDialogStates, \
@@ -30,16 +29,22 @@ from app.core.database import connection, async_session_maker
 from app.handlers import BaseHandler
 from app.handlers.schemas import TelegramIDModel, SpecialEquipmentIdFilter, \
     RequestCreate, EquipmentRentalHistoryCreate, SpecialEquipmentCategoryId, RequestStatusBase, RequestFilter, \
-    RequestUpdate
+    RequestUpdate, UserCreate
 from app.handlers.user.dao import AgreePolicyDAO
 from app.handlers.dao import SpecialEquipmentCategoryDAO, SpecialEquipmentDAO, RequestDAO, EquipmentRentalHistoryDAO, \
-    PaymentTransactionDAO, RequestStatusDAO
+    PaymentTransactionDAO, RequestStatusDAO, UserDAO, UserStatusDAO
 from app.handlers.user.schemas import AgreePolicyModel
 from app.handlers.user.utils import AgreePolicyFilter, get_active_policy_url, async_get_category_buttons, \
     async_get_equipment_buttons, async_get_equipment_details, validate_phone_number, no_err_filter
 from app.handlers.user.keyboards import paginated_categories, paginated_equipment
 
 logger = get_logger(__name__)
+
+async def is_private_chat(message: Message) -> bool:
+    return message.chat.type == "private"
+
+async def is_group_chat(message: Message) -> bool:
+    return message.chat.type in ["group", "supergroup"]
 
 
 def get_user_from_update(event: Update):
@@ -57,14 +62,14 @@ def get_user_from_update(event: Update):
 
 async def on_start_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
     logger_my = dialog_manager.middleware_data.get("logger") or logger
-    logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Начать'")
+    logger_my.debug(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Начать'")
     await dialog_manager.switch_to(MainDialogStates.action_menu)
 
 
 async def on_rent_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
     logger_my = dialog_manager.middleware_data.get("logger") or logger
-    logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Аренда'")
-    logger_my.info(f"Переход в состояние {MainDialogStates.select_category}")
+    logger_my.debug(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Аренда'")
+    logger_my.debug(f"Переход в состояние {MainDialogStates.select_category}")
     try:
         await dialog_manager.switch_to(MainDialogStates.select_category)
     except NoContextError as e:
@@ -78,9 +83,9 @@ async def on_category_click(callback: CallbackQuery, widget, manager: DialogMana
     logger_my = manager.middleware_data.get("logger") or logger
     category_id = int(item_id)
     manager.dialog_data["category_id"] = category_id
-    logger_my.info(f'category_id сохранился = {manager.dialog_data["category_id"]}')
+    logger_my.debug(f'category_id сохранился = {manager.dialog_data["category_id"]}')
     category_name = await get_category_name(category_id, session)
-    logger_my.info(f"Пользователь {manager.event.from_user.id} выбрал категорию '{category_name}' (id={category_id})")
+    logger_my.debug(f"Пользователь {manager.event.from_user.id} выбрал категорию '{category_name}' (id={category_id})")
     await manager.start(
         state=MainDialogStates.select_equipment,
         data={"category_id": category_id, "category_name": category_name},
@@ -111,7 +116,7 @@ async def on_equipment_click(callback: CallbackQuery, widget, manager: DialogMan
         await callback.answer()
         return
     category_id = equipment.category_id
-    logger_my.info(f"Пользователь {manager.event.from_user.id} выбрал технику '{equipment.name}' (id={equipment_id})")
+    logger_my.debug(f"Пользователь {manager.event.from_user.id} выбрал технику '{equipment.name}' (id={equipment_id})")
     await manager.start(
         state=MainDialogStates.view_equipment_details,
         data={"equipment_id": equipment_id, 'category_id': category_id},
@@ -126,9 +131,9 @@ async def on_back_to_menu_click(callback: CallbackQuery, button, dialog_manager:
     logger_my.debug(f"Пользователь {user_id} нажал 'Назад' в окне Категории, callback_data={callback.data}")
     try:
         current_state = dialog_manager.current_context().state if dialog_manager.current_context() else "None"
-        logger_my.info(f"Текущее состояние: {current_state}, переход в {MainDialogStates.action_menu}")
+        logger_my.debug(f"Текущее состояние: {current_state}, переход в {MainDialogStates.action_menu}")
         await dialog_manager.switch_to(MainDialogStates.action_menu)
-        logger_my.info(f"Пользователь {user_id} успешно вернулся в главное меню")
+        logger_my.debug(f"Пользователь {user_id} успешно вернулся в главное меню")
     except Exception as e:
         logger_my.error(f"Ошибка при переходе в главное меню: {str(e)}", exc_info=True)
         await callback.message.answer("Ошибка при возврате в главное меню. Попробуйте снова.")
@@ -137,7 +142,7 @@ async def on_back_to_menu_click(callback: CallbackQuery, button, dialog_manager:
 
 async def on_pending_payment_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
     logger_my = dialog_manager.middleware_data.get("logger") or logger
-    logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Заявки на оплату'")
+    logger_my.debug(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Заявки на оплату'")
     await dialog_manager.start(
         state=MainDialogStates.pending_payment_requests,
         mode=StartMode.NORMAL
@@ -147,7 +152,7 @@ async def on_pending_payment_click(callback: CallbackQuery, button, dialog_manag
 
 async def on_more_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
     logger_my = dialog_manager.middleware_data.get("logger") or logger
-    logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Подробнее'")
+    logger_my.debug(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Подробнее'")
     await dialog_manager.switch_to(MainDialogStates.more_menu)
     await callback.answer()
 
@@ -156,7 +161,7 @@ async def on_exit_click(callback: CallbackQuery, button, dialog_manager: DialogM
     logger_my = dialog_manager.middleware_data.get("logger") or logger
     user_id = callback.from_user.id
     try:
-        logger_my.info(f"Пользователь {user_id} вышел из меню")
+        logger_my.debug(f"Пользователь {user_id} вышел из меню")
         await callback.message.delete()
         dialog_manager.dialog_data.clear()
         await dialog_manager.reset_stack()
@@ -220,6 +225,7 @@ async def on_send_request_click(callback: CallbackQuery, button: Button, dialog_
     logger_my = dialog_manager.middleware_data.get("logger") or logger
     user = callback.from_user
     data = dialog_manager.dialog_data
+    bot = callback.message.bot
 
     # Извлекаем данные из диалога
     equipment_name = data.get("equipment_name")
@@ -237,7 +243,7 @@ async def on_send_request_click(callback: CallbackQuery, button: Button, dialog_
             equipment_dao = SpecialEquipmentDAO(session)
             equipment = await equipment_dao.find_by_name(equipment_name)
             if not equipment:
-                raise ValueError(f"Оборудование с именем '{equipment_name}' не найдено")
+                raise ValueError(f"Спецтехника с именем '{equipment_name}' не найдено")
 
             request_dao = RequestDAO(session)
             new_request = RequestCreate(
@@ -261,6 +267,28 @@ async def on_send_request_click(callback: CallbackQuery, button: Button, dialog_
 
             await session.commit()
 
+            formatted_date = datetime.fromisoformat(selected_date).strftime("%d.%m.%Y")
+            manager_message = (
+                f"📢 Новая заявка\n"
+                f"👤 Пользователь: {first_name} (@{username})\n"
+                f"🚜 Техника: {equipment_name}\n"
+                f"📅 Дата: {formatted_date}\n"
+                f"📞 Телефон: {phone_number}\n"
+                f"📍 Адрес: {address}\n"
+                f"🆔 Telegram ID: {user.id}"
+            )
+
+            try:
+                await bot.send_message(
+                    chat_id=settings.chat_id,
+                    text=manager_message
+                )
+                logger_my.debug(
+                    f"Уведомление о новой заявке отправлено в чат менеджеров {settings.chat_id}")
+
+            except Exception as e:
+                logger_my.error(f"Ошибка при отправке уведомления в чат менеджеров: {str(e)}")
+
             await callback.message.answer("Заявка успешно отправлена!")
         except Exception as e:
             await session.rollback()
@@ -272,7 +300,7 @@ async def on_send_request_click(callback: CallbackQuery, button: Button, dialog_
 
 async def on_cancel_rent_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
     logger_my = dialog_manager.middleware_data.get("logger") or logger
-    logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Отмена Аренды'")
+    logger_my.debug(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Отмена Аренды'")
     await dialog_manager.start(
         state=MainDialogStates.cancel_rent,
         mode=StartMode.RESET_STACK
@@ -280,16 +308,9 @@ async def on_cancel_rent_click(callback: CallbackQuery, button, dialog_manager: 
     await callback.answer()
 
 
-async def on_more_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
-    logger_my = dialog_manager.middleware_data.get("logger") or logger
-    logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Подробнее'")
-    await dialog_manager.switch_to(MainDialogStates.more_menu)
-    await callback.answer()
-
-
 async def on_paid_invoices_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
     logger_my = dialog_manager.middleware_data.get("logger") or logger
-    logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Оплаченные счета'")
+    logger_my.debug(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Оплаченные счета'")
     await dialog_manager.start(
         state=MainDialogStates.paid_invoices,
         mode=StartMode.NORMAL
@@ -299,7 +320,7 @@ async def on_paid_invoices_click(callback: CallbackQuery, button, dialog_manager
 
 async def on_my_requests_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
     logger_my = dialog_manager.middleware_data.get("logger") or logger
-    logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Мои заявки'")
+    logger_my.debug(f"Пользователь {dialog_manager.event.from_user.id} нажал 'Мои заявки'")
     await dialog_manager.start(
         state=MainDialogStates.my_requests,
         mode=StartMode.NORMAL
@@ -546,7 +567,7 @@ def main_dialog() -> Dialog:
 async def on_agree_policy_click(callback: CallbackQuery, dialog_manager: DialogManager, session) -> None:
     user = callback.from_user
     logger_my = dialog_manager.middleware_data.get("logger") or logger
-    logger_my.info(f"Пользователь {user.id} ({user.first_name}) согласился с политикой конфиденциальности")
+    logger_my.debug(f"Пользователь {user.id} ({user.first_name}) согласился с политикой конфиденциальности")
     try:
         policy_dao = AgreePolicyDAO(session)
         existing_policy = await policy_dao.find_one_or_none(TelegramIDModel(telegram_id=user.id))
@@ -554,19 +575,48 @@ async def on_agree_policy_click(callback: CallbackQuery, dialog_manager: DialogM
             await callback.message.answer("Вы уже согласились с политикой конфиденциальности.")
             await callback.answer()
             return
+
         await policy_dao.add(AgreePolicyModel(
             telegram_id=user.id,
             name=user.first_name,
         ))
+
+        user_dao = UserDAO(session)
+        existing_user = await user_dao.find_by_telegram_id(user.id)
+        if not existing_user:
+            status_dao = UserStatusDAO(session)
+            default_status = await status_dao.find_one_or_none({"status": "пользователь"})
+            if not default_status:
+                raise ValueError("Статус 'active' не найден в базе данных")
+
+            await user_dao.add(UserCreate(
+                telegram_id=user.id,
+                username=user.username,
+                status_id=default_status.id
+            ))
+
+        await callback.message.delete()
+
         await callback.message.answer("Спасибо, вы согласились с политикой конфиденциальности! "
                                       "Функционал разблокирован! Используйте /menu")
+        await session.commit()
     except ValidationError as e:
-        logger_my.error(f"Ошибка валидации AgreePolicyModel для tg_id={user.id}: {str(e)}", exc_info=True)
-        await callback.message.answer("Ошибка при сохранении согласия. Попробуйте позже.")
+        logger_my.error(f"Ошибка валидации данных для tg_id={user.id}: {str(e)}", exc_info=True)
+        await callback.message.answer("Ошибка при сохранении данных. Попробуйте позже.")
+        await session.rollback()
     except Exception as e:
-        logger_my.error(f"Ошибка при добавлении согласия для tg_id={user.id}: {str(e)}", exc_info=True)
-        await callback.message.answer("Ошибка при сохранении согласия. Попробуйте позже.")
+        logger_my.error(f"Ошибка при добавлении данных для tg_id={user.id}: {str(e)}", exc_info=True)
+        await callback.message.answer("Ошибка при сохранении данных. Попробуйте позже.")
+        await session.rollback()
     await callback.answer()
+
+
+async def on_group_chat_command(message: Message) -> None:
+    logger.debug(
+        f"Получена команда {message.text} в групповом чате {message.chat.id} от пользователя {message.from_user.id}")
+    await message.answer(
+        "Этот бот работает только в личных сообщениях. Пожалуйста, напишите мне в личный чат!"
+    )
 
 
 class UserHandler(BaseHandler):
@@ -576,10 +626,15 @@ class UserHandler(BaseHandler):
         self.dp.include_router(self.dialog)
 
     def register_handlers(self):
-        self.dp.message(Command(commands=["start", "menu", "меню", "начать", "main"]),
+        self.dp.message(Command(commands=["start", "menu", "меню", "начать", "main"]), is_private_chat,
                         AgreePolicyFilter())(self.start_command)
-        self.dp.message(~AgreePolicyFilter())(self.on_no_policy_agreement)
+        self.dp.message(is_private_chat, ~AgreePolicyFilter())(self.on_no_policy_agreement)
         self.dp.callback_query(lambda c: c.data == "agree_policy")(on_agree_policy_click)
+
+        self.dp.message(
+            Command(commands=["start", "menu", "меню", "начать", "main"]),
+            is_group_chat
+        )(on_group_chat_command)
 
         self.dp.pre_checkout_query(lambda query: True)(handle_pre_checkout_query)
         self.dp.message(F.content_type == ContentType.SUCCESSFUL_PAYMENT)(handle_successful_payment)
@@ -703,10 +758,9 @@ class UserHandler(BaseHandler):
 
     async def start_command(self, message: Message, dialog_manager: DialogManager) -> None:
         user = message.from_user
-        self.logger.info(f"Пользователь {user.id} ({user.first_name}) отправил команду /start или /menu")
+        self.logger.debug(f"Пользователь {user.id} ({user.first_name}) отправил команду /start или /menu")
         dialog_manager.middleware_data["logger"] = self.logger
 
-        # Удаляем старое сообщение с меню, если оно существует
         fsm_context = dialog_manager.middleware_data.get("fsm_context")
         if fsm_context:
             user_id_str = str(user.id)
@@ -730,7 +784,7 @@ class UserHandler(BaseHandler):
     @connection()
     async def on_no_policy_agreement(self, message: Message, session) -> None:
         user = message.from_user
-        self.logger.info(
+        self.logger.debug(
             f"Пользователь {user.id} ({user.first_name}) отправил сообщение без согласия с политикой")
         policy_url = await get_active_policy_url(session)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -749,7 +803,7 @@ class UserHandler(BaseHandler):
 
 @connection()
 async def handle_pre_checkout_query(pre_checkout_query: PreCheckoutQuery, bot, session) -> None:
-    logger.info(f"Получен предварительный запрос на оплату: {pre_checkout_query.id}")
+    logger.debug(f"Получен предварительный запрос на оплату: {pre_checkout_query.id}")
 
     try:
         if pre_checkout_query.invoice_payload.startswith("request_"):
@@ -776,7 +830,7 @@ async def handle_pre_checkout_query(pre_checkout_query: PreCheckoutQuery, bot, s
 @connection()
 async def handle_successful_payment(message: Message, bot, session, **kwargs) -> None:
     successful_payment = message.successful_payment
-    logger.info(f"Получено уведомление об успешной оплате: {successful_payment.order_info}")
+    logger.debug(f"Получено уведомление об успешной оплате: {successful_payment.order_info}")
 
     payload = successful_payment.invoice_payload
     if not payload.startswith("request_"):
@@ -823,7 +877,7 @@ async def handle_successful_payment(message: Message, bot, session, **kwargs) ->
 async def cancel_invoice_handler(callback_query: CallbackQuery):
     try:
         await callback_query.message.delete()
-        logger.info(f"Сообщение с инвойсом удалено пользователем {callback_query.from_user.id}")
+        logger.debug(f"Сообщение с инвойсом удалено пользователем {callback_query.from_user.id}")
     except Exception as e:
         logger.warning(f"Не удалось удалить сообщение: {e}")
     await callback_query.answer()

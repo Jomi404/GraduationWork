@@ -3,10 +3,12 @@ from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.future import select
 from sqlalchemy import update as sqlalchemy_update, delete as sqlalchemy_delete, func, Row, RowMapping
-from loguru import logger
+from app.utils import get_logger
 from sqlalchemy.ext.asyncio import AsyncSession
 from .database import Base
 from asyncpg.exceptions import ConnectionDoesNotExistError
+
+logger = get_logger(__name__)
 
 T = TypeVar("T", bound=Base)
 
@@ -24,7 +26,7 @@ class BaseDAO(Generic[T]):
             query = select(self.model).filter_by(id=data_id)
             result = await self._session.execute(query)
             record = result.scalar_one_or_none()
-            logger.info(f"Запись {self.model.__name__} с ID {data_id} {'найдена' if record else 'не найдена'}.")
+            logger.debug(f"Запись {self.model.__name__} с ID {data_id} {'найдена' if record else 'не найдена'}.")
             return record
         except (SQLAlchemyError, ConnectionDoesNotExistError) as e:
             logger.error(f"Ошибка при поиске записи с ID {data_id}: {e}")
@@ -39,14 +41,14 @@ class BaseDAO(Generic[T]):
             filter_dict = filters
         else:
             raise ValueError("Filters must be a Pydantic model or a dictionary")
-        logger.info(f"Поиск одной записи {self.model.__name__} по фильтрам: {filter_dict}")
+        logger.debug(f"Поиск одной записи {self.model.__name__} по фильтрам: {filter_dict}")
         try:
             query = select(self.model).filter_by(**filter_dict)
             if options:
                 query = query.options(*options)
             result = await self._session.execute(query)
             record = result.scalar_one_or_none()
-            logger.info(f"Запись {'найдена' if record else 'не найдена'} по фильтрам: {filter_dict}")
+            logger.debug(f"Запись {'найдена' if record else 'не найдена'} по фильтрам: {filter_dict}")
             return record
         except (SQLAlchemyError, ConnectionDoesNotExistError) as e:
             logger.error(f"Ошибка при поиске записи по фильтрам {filter_dict}: {e}")
@@ -66,14 +68,14 @@ class BaseDAO(Generic[T]):
                 filter_dict = filters
             else:
                 raise ValueError("Filters must be a Pydantic model or a dictionary")
-        logger.info(f"Поиск всех записей {self.model.__name__} по фильтрам: {filter_dict}")
+        logger.debug(f"Поиск всех записей {self.model.__name__} по фильтрам: {filter_dict}")
         try:
             query = select(self.model).filter_by(**filter_dict)
             if order_by is not None:
                 query = query.order_by(order_by)
             result = await self._session.execute(query)
             records = result.scalars().all()
-            logger.info(f"Найдено {len(records)} записей.")
+            logger.debug(f"Найдено {len(records)} записей.")
             return records
         except (SQLAlchemyError, ConnectionDoesNotExistError) as e:
             logger.error(f"Ошибка при поиске всех записей по фильтрам {filter_dict}: {e}")
@@ -82,12 +84,12 @@ class BaseDAO(Generic[T]):
 
     async def add(self, values: BaseModel):
         values_dict = values.model_dump(exclude_unset=True)
-        logger.info(f"Добавление записи {self.model.__name__} с параметрами: {values_dict}")
+        logger.debug(f"Добавление записи {self.model.__name__} с параметрами: {values_dict}")
         try:
             new_instance = self.model(**values_dict)
             self._session.add(new_instance)
             await self._session.flush()
-            logger.info(f"Запись {self.model.__name__} успешно добавлена.")
+            logger.debug(f"Запись {self.model.__name__} успешно добавлена.")
             return new_instance
         except (SQLAlchemyError, ConnectionDoesNotExistError) as e:
             logger.error(f"Ошибка при добавлении записи: {e}")
@@ -96,12 +98,12 @@ class BaseDAO(Generic[T]):
 
     async def add_many(self, instances: List[BaseModel]):
         values_list = [item.model_dump(exclude_unset=True) for item in instances]
-        logger.info(f"Добавление нескольких записей {self.model.__name__}. Количество: {len(values_list)}")
+        logger.debug(f"Добавление нескольких записей {self.model.__name__}. Количество: {len(values_list)}")
         try:
             new_instances = [self.model(**values) for values in values_list]
             self._session.add_all(new_instances)
             await self._session.flush()
-            logger.info(f"Успешно добавлено {len(new_instances)} записей.")
+            logger.debug(f"Успешно добавлено {len(new_instances)} записей.")
             return new_instances
         except (SQLAlchemyError, ConnectionDoesNotExistError) as e:
             logger.error(f"Ошибка при добавлении нескольких записей: {e}")
@@ -117,7 +119,7 @@ class BaseDAO(Generic[T]):
         else:
             raise ValueError("Filters must be a Pydantic model or a dictionary")
         values_dict = values.model_dump(exclude_unset=True)
-        logger.info(f"Обновление записей по фильтру: {filter_dict} с параметрами: {values_dict}")
+        logger.debug(f"Обновление записей по фильтру: {filter_dict} с параметрами: {values_dict}")
         try:
             query = (
                 sqlalchemy_update(self.model)
@@ -127,7 +129,7 @@ class BaseDAO(Generic[T]):
             )
             result = await self._session.execute(query)
             await self._session.flush()
-            logger.info(f"Обновлено {result.rowcount} записей.")
+            logger.debug(f"Обновлено {result.rowcount} записей.")
             return result.rowcount
         except (SQLAlchemyError, ConnectionDoesNotExistError) as e:
             logger.error(f"Ошибка при обновлении записей: {e}")
@@ -141,14 +143,14 @@ class BaseDAO(Generic[T]):
             filter_dict = filters
         else:
             raise ValueError("Фильтры должны быть моделью Pydantic или словарем")
-        logger.info(f"Удаление записей по фильтру: {filter_dict}")
+        logger.debug(f"Удаление записей по фильтру: {filter_dict}")
         if not filter_dict:
             raise ValueError("Нужен хотя бы один фильтр для удаления.")
         try:
             query = sqlalchemy_delete(self.model).filter_by(**filter_dict)
             result = await self._session.execute(query)
             await self._session.flush()
-            logger.info(f"Удалено {result.rowcount} записей.")
+            logger.debug(f"Удалено {result.rowcount} записей.")
             return result.rowcount
         except (SQLAlchemyError, ConnectionDoesNotExistError) as e:
             logger.error(f"Ошибка при удалении записей: {e}")
@@ -157,12 +159,12 @@ class BaseDAO(Generic[T]):
 
     async def count(self, filters: BaseModel | None = None):
         filter_dict = filters.model_dump(exclude_unset=True) if filters else {}
-        logger.info(f"Подсчет количества записей по фильтру: {filter_dict}")
+        logger.debug(f"Подсчет количества записей по фильтру: {filter_dict}")
         try:
             query = select(func.count(self.model.id)).filter_by(**filter_dict)
             result = await self._session.execute(query)
             count = result.scalar()
-            logger.info(f"Найдено {count} записей.")
+            logger.debug(f"Найдено {count} записей.")
             return count
         except (SQLAlchemyError, ConnectionDoesNotExistError) as e:
             logger.error(f"Ошибка при подсчете записей: {e}")
@@ -170,7 +172,7 @@ class BaseDAO(Generic[T]):
             raise
 
     async def bulk_update(self, records: List[BaseModel]):
-        logger.info(f"Массовое обновление записей")
+        logger.debug(f"Массовое обновление записей")
         try:
             updated_count = 0
             for record in records:
@@ -186,7 +188,7 @@ class BaseDAO(Generic[T]):
                 result = await self._session.execute(stmt)
                 updated_count += result.rowcount
             await self._session.flush()
-            logger.info(f"Обновлено {updated_count} записей")
+            logger.debug(f"Обновлено {updated_count} записей")
             return updated_count
         except (SQLAlchemyError, ConnectionDoesNotExistError) as e:
             logger.error(f"Ошибка при массовом обновлении: {e}")
@@ -195,11 +197,11 @@ class BaseDAO(Generic[T]):
 
     async def create(self, instance: T) -> T:
         """Создает новую запись в базе данных."""
-        logger.info(f"Создание записи {self.model.__name__} с параметрами: {vars(instance)}")
+        logger.debug(f"Создание записи {self.model.__name__} с параметрами: {vars(instance)}")
         try:
             self._session.add(instance)
             await self._session.flush()
-            logger.info(f"Запись {self.model.__name__} успешно создана с ID {instance.id}")
+            logger.debug(f"Запись {self.model.__name__} успешно создана с ID {instance.id}")
             return instance
         except (SQLAlchemyError, ConnectionDoesNotExistError) as e:
             logger.error(f"Ошибка при создании записи: {e}")

@@ -646,7 +646,7 @@ async def create_request_getter(dialog_manager: DialogManager, **kwargs) -> Dict
 
 async def on_cancel_by_date_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
     logger_my = dialog_manager.middleware_data.get("logger") or logger
-    logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} выбрал отмену аренды по дате")
+    logger_my.debug(f"Пользователь {dialog_manager.event.from_user.id} выбрал отмену аренды по дате")
     await dialog_manager.start(
         state=MainDialogStates.cancel_by_date,
         mode=StartMode.NORMAL
@@ -656,7 +656,7 @@ async def on_cancel_by_date_click(callback: CallbackQuery, button, dialog_manage
 
 async def on_cancel_by_equipment_click(callback: CallbackQuery, button, dialog_manager: DialogManager) -> None:
     logger_my = dialog_manager.middleware_data.get("logger") or logger
-    logger_my.info(f"Пользователь {dialog_manager.event.from_user.id} выбрал отмену аренды по названию спецтехники")
+    logger_my.debug(f"Пользователь {dialog_manager.event.from_user.id} выбрал отмену аренды по названию спецтехники")
     await dialog_manager.start(
         state=MainDialogStates.cancel_by_equipment,
         mode=StartMode.NORMAL
@@ -802,10 +802,10 @@ async def on_cancel_all_requests_click(callback: CallbackQuery, button, dialog_m
     )
 
     if updated > 0:
-        logger_my.info(f"Все заявки пользователя {tg_id} отменены (всего: {updated})")
+        logger_my.debug(f"Все заявки пользователя {tg_id} отменены (всего: {updated})")
         await callback.message.answer(f"Все ваши заявки ({updated}) успешно отменены! ✅")
     else:
-        logger_my.info(f"У пользователя {tg_id} нет активных заявок для отмены")
+        logger_my.debug(f"У пользователя {tg_id} нет активных заявок для отмены")
         await callback.message.answer("У вас нет активных заявок для отмены.")
 
     # Очищаем кэш

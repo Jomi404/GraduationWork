@@ -284,3 +284,11 @@ class PaymentTransactionCreate(BaseModel):
     status: str
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+
+class UserCreate(BaseModel):
+    """Схема для создания нового пользователя."""
+    telegram_id: int
+    username: Optional[str] = None
+    status_id: int
+    model_config = ConfigDict(from_attributes=True)

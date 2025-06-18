@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     telegram_token: str
     provider_token: str
     currency: str
+    admin_root: str
+    chat_id: str
 
     @property
     def DB_URL(self) -> str:

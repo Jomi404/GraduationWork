@@ -13,10 +13,10 @@ async def generate_default_equipment(session: AsyncSession) -> None:
     equipment_dao = SpecialEquipmentDAO(session)
     existing_equipment = await equipment_dao.find_all()
     if existing_equipment:
-        logger.info(f"Таблица special_equipments уже содержит записи: {len(existing_equipment)}")
+        logger.debug(f"Таблица special_equipments уже содержит записи: {len(existing_equipment)}")
         return
 
-    logger.info("Таблица special_equipments пуста. Генерируем дефолтные записи.")
+    logger.debug("Таблица special_equipments пуста. Генерируем дефолтные записи.")
 
     category_dao = SpecialEquipmentCategoryDAO(session)
     categories = await category_dao.find_all()
@@ -48,5 +48,5 @@ async def generate_default_equipment(session: AsyncSession) -> None:
         await equipment_dao.add(equipment)
 
     await session.commit()
-    logger.info(f"Сгенерировано {len(default_equipment)} записей в таблице special_equipments")
+    logger.debug(f"Сгенерировано {len(default_equipment)} записей в таблице special_equipments")
 

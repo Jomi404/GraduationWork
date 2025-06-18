@@ -24,7 +24,7 @@ async def get_active_policy_url(session) -> str:
         policy_dao = PrivacyPolicyDAO(session)
         active_policy = await policy_dao.find_one_or_none(PrivacyPolicyFilter(is_active=True))
         if active_policy:
-            logger.info(f"Найдена активная политика конфиденциальности с URL: {active_policy.url}")
+            logger.debug(f"Найдена активная политика конфиденциальности с URL: {active_policy.url}")
             return active_policy.url
         logger.warning("Активная политика конфиденциальности не найдена в базе данных")
         return "https://graph.org/Politika-konfidencialnosti-05-05-8"
@@ -42,7 +42,7 @@ class AgreePolicyFilter(BaseFilter):
             policy_dao = AgreePolicyDAO(session)
             policy = await policy_dao.find_one_or_none(TelegramIDModel(telegram_id=telegram_id))
             has_agreed = policy is not None
-            logger.info(f"Пользователь tg_id={telegram_id} {'согласился' if has_agreed else 'не согласился'} "
+            logger.debug(f"Пользователь tg_id={telegram_id} {'согласился' if has_agreed else 'не согласился'} "
                         f"с политикой конфиденциальности")
             return has_agreed
         except Exception as e:
@@ -98,7 +98,7 @@ async def async_get_category_buttons(dialog_manager: DialogManager, **kwargs) ->
         active_logger.debug(f"Дефолтные категории: {all_categories}, всего страниц: {total_pages}")
 
     dialog_manager.dialog_data["total_category_pages"] = total_pages
-    active_logger.info(f"Подготовлены категории: {all_categories}")
+    active_logger.debug(f"Подготовлены категории: {all_categories}")
 
     return {
         "categories": all_categories,  # Возвращаем полный список категорий
@@ -273,7 +273,7 @@ async def check_equipment_availability(equipment_name: str, session: AsyncSessio
             else f"Техника {equipment_name} занята в указанный период"
         )
 
-        logger.info(f"Результат проверки доступности {equipment_name}: {message}")
+        logger.debug(f"Результат проверки доступности {equipment_name}: {message}")
         logger.debug(f"Доступные даты: {available_dates}")
         return {
             "is_available": is_available,

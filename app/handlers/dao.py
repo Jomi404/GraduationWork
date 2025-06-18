@@ -1,7 +1,10 @@
+from sqlalchemy.orm import selectinload
+
 from app.core.base_dao import BaseDAO
 from app.handlers.models import Privacy_Policy, Special_Equipment_Category, Special_Equipment, \
-    Equipment_Rental_History, Request_Status, Request, CompanyContact, PaymentTransaction
-from app.handlers.schemas import RequestStatusBase, RequestCreate, SpecialEquipmentIdFilterName, CompanyContactFilter
+    Equipment_Rental_History, Request_Status, Request, CompanyContact, PaymentTransaction, User, UserStatus
+from app.handlers.schemas import RequestStatusBase, RequestCreate, SpecialEquipmentIdFilterName, CompanyContactFilter, \
+    TelegramIDModel
 from app.utils import get_logger
 
 logger = get_logger(__name__)
@@ -124,3 +127,17 @@ class CompanyContactDAO(BaseDAO[CompanyContact]):
 class PaymentTransactionDAO(BaseDAO[PaymentTransaction]):
     """Объект доступа к данным (DAO) для управления записями PaymentTransaction."""
     model = PaymentTransaction
+
+
+class UserDAO(BaseDAO[User]):
+    model = User
+
+    async def find_by_telegram_id(self, telegram_id: int) -> User | None:
+        """Найти пользователя по telegram_id с предзагрузкой статуса."""
+        filters = TelegramIDModel(telegram_id=telegram_id)
+        return await self.find_one_or_none(filters, options=[selectinload(User.status)])
+
+
+class UserStatusDAO(BaseDAO[UserStatus]):
+    """Объект доступа к данным (DAO) для управления записями UserStatus."""
+    model = UserStatus

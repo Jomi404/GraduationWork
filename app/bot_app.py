@@ -13,34 +13,26 @@ class BotApplication:
     """Базовый класс для Telegram-бота."""
 
     def __init__(self):
-        # Настройка логирования
         setup_logging()
         self.logger = get_logger(__name__)
 
-        # Инициализация бота и диспетчера
         self.bot = Bot(token=settings.telegram_token)
         self.dp = Dispatcher()
 
-        # Регистрация middleware
         self.dp.message.middleware(LoggingMiddleware())
 
-        # Создание отдельных роутеров для обработчиков
         user_router = Router()
         admin_router = Router()
 
-        # Инициализация обработчиков
         self.user_handler = UserHandler(user_router)
         self.admin_handler = AdminHandler(admin_router)
 
-        # Регистрация middleware для логгеров
         self.dp.update.middleware(self.user_handler.set_logger_middleware)
         self.dp.update.middleware(self.admin_handler.set_logger_middleware)
 
-        # Регистрация обработчиков
         self.user_handler.register_handlers()
         self.admin_handler.register_handlers()
 
-        # Включение роутеров в Dispatcher
         self.dp.include_router(user_router)
         self.dp.include_router(admin_router)
         setup_dialogs(self.dp)
@@ -48,13 +40,10 @@ class BotApplication:
 
     async def start(self):
         await init_db()
-        # Генерация дефолтных записей техники
-        async with get_session() as session:  # Используем get_session вместо connection
+        async with get_session() as session:
             await generate_default_equipment(session)
-        # Очистка накопившихся обновлений
         self.logger.info("Очистка накопившихся обновлений...")
         await self.bot.delete_webhook(drop_pending_updates=True)
-        # Пропускаем накопившиеся апдейты и запускаем polling
         self.logger.info("Запуск polling...")
         await self.dp.start_polling(self.bot, skip_updates=True)
 
