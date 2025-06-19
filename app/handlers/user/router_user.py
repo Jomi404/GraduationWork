@@ -175,14 +175,12 @@ async def go_menu(callback: CallbackQuery, button: Button, manager: DialogManage
 
 
 async def on_share_contact_click(callback, button, manager: DialogManager):
-    # Создаём клавиатуру с кнопкой для запроса контакта
     contact_button = KeyboardButton(text="Отправить номер", request_contact=True)
     keyboard = ReplyKeyboardMarkup(
         keyboard=[[contact_button]],
         resize_keyboard=True,
         one_time_keyboard=True
     )
-    # Отправляем сообщение с клавиатурой
     await callback.message.answer(
         "Нажмите кнопку ниже, чтобы отправить ваш номер телефона.",
         reply_markup=keyboard
@@ -204,6 +202,7 @@ async def on_phone_number_input(message: Message, widget: MessageInput, dialog_m
         formatted_phone = validate_phone_number(phone)
         if formatted_phone:
             dialog_manager.dialog_data["phone_number"] = formatted_phone
+            dialog_manager.dialog_data["error_message"] = ""
             await dialog_manager.switch_to(MainDialogStates.confirm_phone)
         else:
             dialog_manager.dialog_data["error_message"] = (
