@@ -34,7 +34,7 @@ def setup_logging():
 
         logger.addHandler(console_handler)
         logger.addHandler(file_handler)
-        logger.setLevel(logging.INFO)
+        logger.setLevel(logging.DEBUG)
 
 
 def get_logger(name: str) -> logging.Logger:

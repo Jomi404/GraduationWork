@@ -1,5 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import Dict, Any
+
 from aiogram import Router
 from aiogram import F
 from aiogram.enums import ContentType
@@ -14,6 +16,7 @@ from aiogram_dialog.widgets.text import Const, Format
 from aiogram_dialog.api.exceptions import NoContextError, UnknownIntent
 from pydantic import ValidationError
 
+from app.address_utils import validate_address, reverse_geocode, geocode_address
 from app.config import settings
 from app.handlers.models import PaymentTransaction
 from app.handlers.user.window import create_confirmation_window, create_rental_calendar_window, enter_phone_getter, \
@@ -40,8 +43,10 @@ from app.handlers.user.keyboards import paginated_categories, paginated_equipmen
 
 logger = get_logger(__name__)
 
+
 async def is_private_chat(message: Message) -> bool:
     return message.chat.type == "private"
+
 
 async def is_group_chat(message: Message) -> bool:
     return message.chat.type in ["group", "supergroup"]
@@ -212,14 +217,6 @@ async def on_phone_number_input(message: Message, widget: MessageInput, dialog_m
             )
 
 
-async def on_address_input(message: Message, widget: MessageInput, dialog_manager: DialogManager):
-    if message.text:
-        dialog_manager.dialog_data["address"] = message.text
-        await dialog_manager.switch_to(MainDialogStates.confirm_address)
-    else:
-        dialog_manager.dialog_data["error_message"] = "Отправьте адрес текстом."
-
-
 async def on_send_request_click(callback: CallbackQuery, button: Button, dialog_manager: DialogManager) -> None:
     logger_my = dialog_manager.middleware_data.get("logger") or logger
     user = callback.from_user
@@ -327,6 +324,65 @@ async def on_my_requests_click(callback: CallbackQuery, button, dialog_manager: 
     await callback.answer()
 
 
+async def on_address_input(message: Message, widget: MessageInput, dialog_manager: DialogManager):
+    address = message.text
+    if not validate_address(address):
+        dialog_manager.dialog_data[
+            'error_message'] = "Укажите адрес в формате: город, улица, дом (например, Новосибирск, Ленина, 1)."
+        return
+    addresses = geocode_address(address)
+    if not addresses:
+        dialog_manager.dialog_data['error_message'] = (
+            "Не удалось найти адрес. Проверьте правильность написания или укажите полное название улицы."
+        )
+        return
+    dialog_manager.dialog_data['address'] = addresses[0]
+    await dialog_manager.switch_to(MainDialogStates.confirm_address)
+
+
+async def on_location_input(message: Message, widget: MessageInput, dialog_manager: DialogManager):
+    """Обработка ввода геолокации."""
+    if message.location:
+        latitude = message.location.latitude
+        longitude = message.location.longitude
+        address = reverse_geocode(latitude, longitude)
+        if address:
+            if validate_address(address):
+                dialog_manager.dialog_data["address"] = address
+                await dialog_manager.switch_to(MainDialogStates.confirm_address)
+            else:
+                dialog_manager.dialog_data["geo_address"] = address
+                dialog_manager.dialog_data['error_message'] = ("Не удалось определить адрес по геолокации. "
+                                                               "Попробуйте еще раз."
+                                                               "\nПоставьте метку на точный адрес")
+                await dialog_manager.switch_to(MainDialogStates.enter_address)
+        else:
+            await message.answer("Не удалось определить адрес по геолокации. Попробуйте еще раз.")
+
+
+async def on_clarify_address_input(message: Message, widget: MessageInput, dialog_manager: DialogManager):
+    """Обработка уточнения адреса."""
+    address = message.text
+    if not validate_address(address):
+        await message.answer("Пожалуйста, укажите адрес с номером дома. Например: Новосибирск, Ленина, 1")
+        return
+    addresses = geocode_address(address)
+    if not addresses:
+        await message.answer(
+            "Не удалось найти адрес. Попробуйте еще раз.\nПожалуйста, укажите адрес в формате: город, улица, дом.")
+        return
+    if len(addresses) == 1:
+        dialog_manager.dialog_data["address"] = addresses[0]
+        await dialog_manager.switch_to(MainDialogStates.confirm_address)
+    else:
+        dialog_manager.dialog_data["addresses"] = addresses
+        await dialog_manager.switch_to(MainDialogStates.enter_address)
+
+
+async def get_clarify_address_data(dialog_manager: DialogManager, **kwargs) -> Dict[str, Any]:
+    return {"geo_address": dialog_manager.dialog_data.get("geo_address", "")}
+
+
 def main_dialog() -> Dialog:
     confirm_select_equipment_window = create_confirmation_window(
         text="Вы уверены, что хотите арендовать эту технику?",
@@ -419,13 +475,23 @@ def main_dialog() -> Dialog:
         Format("Дата: {selected_date}", when=no_err_filter),
         Format("Номер телефона: {phone_number}", when=no_err_filter),
         Format(
-            "Введите адрес доставки ниже.",
+            "Введите адрес доставки ниже или отправьте геолокацию.",
             when=no_err_filter
         ),
-        MessageInput(on_address_input),
+        MessageInput(func=on_address_input, content_types=[ContentType.TEXT]),
+        MessageInput(func=on_location_input, content_types=[ContentType.LOCATION]),
         Back(text=Const(text='Назад'), id='back'),
         state=MainDialogStates.enter_address,
         getter=enter_address_getter
+    )
+
+    clarify_address_window = Window(
+        Format("Адрес по геолокации: {geo_address}"),
+        Const("Пожалуйста, уточните адрес с номером дома:"),
+        MessageInput(func=on_clarify_address_input, content_types=[ContentType.TEXT]),
+        Back(text=Const(text='Назад'), id='back'),
+        state=MainDialogStates.clarify_address,
+        getter=get_clarify_address_data
     )
 
     create_request_window = Window(
@@ -540,6 +606,7 @@ def main_dialog() -> Dialog:
         confirm_phone_window,
         enter_address_window,
         confirm_address_window,
+        clarify_address_window,
         create_request_window,
         request_sent_window,
         calendar_view_window,

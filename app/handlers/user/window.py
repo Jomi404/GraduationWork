@@ -77,8 +77,11 @@ class MainDialogStates(StatesGroup):
     confirm_date = State()
     enter_phone = State()
     confirm_phone = State()
+
     enter_address = State()
     confirm_address = State()
+    clarify_address = State()
+
     create_request = State()
     request_sent = State()
     cancel_rent = State()
@@ -98,6 +101,7 @@ class MainDialogStates(StatesGroup):
     requests_in_progress = State()
     requests_completed = State()
     request_details = State()
+
 
 
 class CustomCalendarDaysView:
@@ -174,7 +178,6 @@ class CustomCalendarDaysView:
                 keyboard.append(week)
                 week = []
 
-        # Обрабатываем последнюю неделю
         if week:
             week += [empty_button() for _ in range(7 - len(week))]
             keyboard.append(week)
@@ -283,11 +286,9 @@ async def _get_available_dates(offset: date, manager: DialogManager) -> List[dat
                 end_date=datetime.combine(end_of_month, datetime.min.time()),
             )
             available_dates = [datetime.fromisoformat(d).date() for d in availability["available_dates"]]
-            # Кэшируем даты
             manager.dialog_data[cache_key] = [d.isoformat() for d in available_dates]
             logger.debug(f"Закэшированы даты для {cache_key}")
 
-    # Фильтруем даты, чтобы они попадали в текущий месяц
     filtered_dates = [d for d in available_dates if start_of_month <= d <= end_of_month]
     return filtered_dates
 
@@ -629,6 +630,9 @@ async def enter_address_getter(dialog_manager: DialogManager, **kwargs) -> Dict[
         "phone_number": dialog_manager.dialog_data.get("phone_number", "Не указан"),
         "error_message": dialog_manager.dialog_data.get("error_message", None),
     }
+    # Сбрасываем error_message, если адрес уже установлен или текущее состояние confirm_address
+    if dialog_manager.dialog_data.get("address") or dialog_manager.current_context().state == MainDialogStates.confirm_address:
+        data["error_message"] = None
     return data
 
 
@@ -695,7 +699,6 @@ async def cancel_by_date_getter(dialog_manager: DialogManager, **kwargs) -> Dict
     current_page = dialog_manager.dialog_data.get("cancel_date_page", 0)
     cache_key = f"cached_requests_date_{tg_id}"
 
-    # Проверяем, нужно ли принудительно обновить данные
     force_refresh = dialog_manager.dialog_data.get("force_refresh", False)
     if force_refresh or cache_key not in dialog_manager.dialog_data:
         async with get_session() as session:
@@ -717,7 +720,6 @@ async def cancel_by_date_getter(dialog_manager: DialogManager, **kwargs) -> Dict
             dialog_manager.dialog_data[cache_key] = all_requests
             logger_my.debug(f"Заявки для tg_id={tg_id} закэшированы: {all_requests}")
 
-        # Сбрасываем флаг принудительного обновления
         if force_refresh:
             dialog_manager.dialog_data["force_refresh"] = False
             logger_my.debug("Флаг force_refresh сброшен")
@@ -755,7 +757,6 @@ async def cancel_by_equipment_getter(dialog_manager: DialogManager, **kwargs) ->
                 logger_my.error("Status 'Новая' not found in database")
                 return {"requests": [], "total_pages": 1}
 
-            # Fetch user requests with status "Новая" using a dictionary for filters
             request_dao = RequestDAO(session)
             requests = await request_dao.find_all(
                 filters={"tg_id": tg_id, "status_id": status.id},
@@ -784,7 +785,6 @@ async def on_cancel_all_requests_click(callback: CallbackQuery, button, dialog_m
     user = dialog_manager.event.from_user
     tg_id = user.id
 
-    # Получаем статусы "Новая" и "Отменена"
     status_dao = RequestStatusDAO(session)
     status_new = await status_dao.find_one_or_none(RequestStatusBase(name="Новая"))
     status_cancelled = await status_dao.find_one_or_none(RequestStatusBase(name="Отменена"))
@@ -794,7 +794,6 @@ async def on_cancel_all_requests_click(callback: CallbackQuery, button, dialog_m
         await callback.answer()
         return
 
-    # Обновляем все заявки пользователя со статусом "Новая" на "Отменена"
     request_dao = RequestDAO(session)
     updated = await request_dao.update(
         filters={"tg_id": tg_id, "status_id": status_new.id},
@@ -808,7 +807,6 @@ async def on_cancel_all_requests_click(callback: CallbackQuery, button, dialog_m
         logger_my.debug(f"У пользователя {tg_id} нет активных заявок для отмены")
         await callback.message.answer("У вас нет активных заявок для отмены.")
 
-    # Очищаем кэш
     cache_key_date = f"cached_requests_date_{tg_id}"
     cache_key_equipment = f"cached_requests_equipment_{tg_id}"
     if cache_key_date in dialog_manager.dialog_data:
@@ -839,7 +837,7 @@ async def request_details_getter(dialog_manager: DialogManager, **kwargs) -> Dic
             "address": request.address,
             "first_name": request.first_name,
             "username": request.username or "Не указан",
-            "status": request.status.name,  # Now safe to access without lazy loading
+            "status": request.status.name,
         }
 
 
@@ -855,12 +853,11 @@ async def on_confirm_delete_click(callback: CallbackQuery, button, dialog_manage
             filters=RequestFilter(id=request_id),
             values=RequestUpdate(status_id=8)
         )
-        await session.commit()  # Явная фиксация транзакции
+        await session.commit()
         if updated > 0:
             await callback.message.answer("Заявка успешно удалена! ✅")
         else:
             await callback.message.answer("Не удалось обновить статус заявки. Проверьте её наличие.")
-    # Очистка кэша
     tg_id = dialog_manager.event.from_user.id
     cache_key_date = f"cached_requests_date_{tg_id}"
     cache_key_equipment = f"cached_requests_equipment_{tg_id}"
@@ -882,33 +879,28 @@ async def on_confirm_delete_all_click(callback: CallbackQuery, button, dialog_ma
     user = dialog_manager.event.from_user
     tg_id = user.id
     async with get_session() as session:
-        # Создаем DAO для работы со статусами и заявками
         status_dao = RequestStatusDAO(session)
         request_dao = RequestDAO(session)
 
-        # Получаем статусы "Новая" и "Отменена"
+
         status_new = await status_dao.find_one_or_none(RequestStatusBase(name="Новая"))
         status_cancelled = await status_dao.find_one_or_none(RequestStatusBase(name="Отменена"))
 
-        # Проверяем, что статусы найдены
         if not status_new or not status_cancelled:
             await callback.message.answer("Ошибка: необходимые статусы не найдены.")
             return
 
-        # Обновляем статус заявок с "Новая" на "Отменена"
         updated = await request_dao.update(
             filters={"tg_id": tg_id, "status_id": status_new.id},
             values=RequestUpdate(status_id=status_cancelled.id)
         )
-        await session.commit()  # Фиксируем изменения
+        await session.commit()
 
-        # Отправляем сообщение пользователю
         if updated > 0:
             await callback.message.answer(f"Все ваши заявки ({updated}) успешно отменены! ✅")
         else:
             await callback.message.answer("У вас нет активных заявок для отмены.")
 
-    # Очистка кэша
     cache_key_date = f"cached_requests_date_{tg_id}"
     cache_key_equipment = f"cached_requests_equipment_{tg_id}"
     if cache_key_date in dialog_manager.dialog_data:
@@ -916,7 +908,6 @@ async def on_confirm_delete_all_click(callback: CallbackQuery, button, dialog_ma
     if cache_key_equipment in dialog_manager.dialog_data:
         del dialog_manager.dialog_data[cache_key_equipment]
 
-    # Переключаем состояние диалога
     await dialog_manager.switch_to(MainDialogStates.cancel_rent)
 
 
