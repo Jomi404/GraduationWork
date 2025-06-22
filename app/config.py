@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     currency: str
     admin_root: str
     chat_id: str
+    yandex_api_key: str
 
     @property
     def DB_URL(self) -> str:
